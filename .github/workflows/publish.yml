@@ -1,0 +1,38 @@
+name: Publish to npm
+on:
+  # Only tag pushes: npm provenance needs the tag as OIDC ref. Release events
+  # carry the default branch instead, and npm rejects the provenance bundle.
+  # Prerelease tags such as v1.2.3-beta.1 are not published.
+  push:
+    tags:
+      - 'v*'
+      - '!v*-*'
+permissions:
+  contents: read
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # Required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm install --global npm@11
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+      - name: Set package version from tag
+        # v1.2.3 -> 1.2.3; npm rejects tags that are not valid semver.
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+      - name: Publish
+        # Scripts are skipped because "npm run check" already ran above.
+        run: npm publish --access public --provenance --ignore-scripts
