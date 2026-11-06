@@ -18,6 +18,8 @@ story when they drift from the API.
 - **Your MSW setup stays yours:** the addon does not start MSW or Mokapi and does
   not import your mock modules.
 
+![Storybook with the Mokapi toolbar switch and the Mokapi panel: the story's mock is missing the required email property, so Mokapi answers with HTTP 500 and the panel shows the validation error](docs/screenshot.png)
+
 ## How it works
 
 ```
