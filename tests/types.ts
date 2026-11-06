@@ -17,6 +17,10 @@ const name: 'success' = scenarios.success.mokapi.scenario;
 void name;
 const storyParameters: Parameters = { mokapi: scenarios.success.mokapi };
 void storyParameters;
+const parametersWithoutApi: Parameters = { mokapi: { scenario: 's', routes: ['/a'] } };
+void parametersWithoutApi;
+const parametersWithApi: Parameters = { mokapi: { api: 'Profile API', scenario: 's', routes: ['/a'] } };
+void parametersWithApi;
 const options: MokapiAddonOptions = { target: 'http://localhost:3000', proxyPath: '/custom-mokapi' };
 void options;
 

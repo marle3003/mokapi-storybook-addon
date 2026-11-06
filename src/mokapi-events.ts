@@ -5,20 +5,28 @@ const EVENTS_PAGE_SIZE = 25;
 
 export function eventsUrl(
   base: string,
-  api: string,
+  api: string | undefined,
   definition: MokapiRouteDefinition,
   page: number,
 ): string {
   const route = validateRoute(definition);
   const query = new URLSearchParams({
     'traits[namespace]': 'http',
-    'traits[name]': api,
     'traits[path]': route.path,
     page: String(page),
     size: String(EVENTS_PAGE_SIZE),
   });
+  if (api !== undefined) query.set('traits[name]', api);
   if (typeof route.method === 'string') query.set('traits[method]', route.method);
   return `${base.replace(/\/$/, '')}/api/events?${query}`;
+}
+
+export function panelSummary(api: string | undefined, scenario: string): string {
+  return api === undefined ? `Scenario: ${scenario}` : `API: ${api} | Scenario: ${scenario}`;
+}
+
+export function eventApis(events: MokapiEvent[]): string[] {
+  return [...new Set(events.map((event) => event.traits.name))].sort();
 }
 
 function eventScenario(event: MokapiEvent, scenarioParameter: string): string | null {

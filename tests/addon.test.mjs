@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { resolveOptions } from '../dist/index.js';
 import { forwardingUrl, validateRoute } from '../dist/forwarding.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
-import { eventsUrl, fetchEvents } from '../dist/mokapi-events.js';
+import { eventApis, eventsUrl, fetchEvents, panelSummary } from '../dist/mokapi-events.js';
 import { http, HttpHandler, HttpResponse, graphql } from 'msw';
 import { createStoryScenarios, createMokapiLoader } from 'mokapi-storybook-addon/msw';
 import {
@@ -389,6 +389,31 @@ test('event query filters by API, operation and page', () => {
     path: '/api/profile', method: { source: 'POST|QUERY', flags: 'i' },
   }, 1), url);
   assert.equal(patternMethod.searchParams.has('traits[method]'), false);
+});
+
+test('event query omits the API trait when no API is given', () => {
+  const url = new URL(eventsUrl('/mokapi-dashboard', undefined, { path: '/api/profile', method: 'POST' }, 3), 'http://localhost');
+  assert.equal(url.searchParams.has('traits[name]'), false);
+  assert.equal(url.searchParams.get('traits[namespace]'), 'http');
+  assert.equal(url.searchParams.get('traits[path]'), '/api/profile');
+  assert.equal(url.searchParams.get('traits[method]'), 'POST');
+  assert.equal(url.searchParams.get('page'), '3');
+  assert.equal(url.searchParams.get('size'), '25');
+});
+
+test('panel summary names the API only when one is given', () => {
+  assert.equal(panelSummary('Profile API', 'success'), 'API: Profile API | Scenario: success');
+  assert.equal(panelSummary(undefined, 'success'), 'Scenario: success');
+});
+
+test('event APIs are the distinct, sorted API names of the events', () => {
+  const event = (name) => ({ traits: { name } });
+  assert.deepEqual(eventApis([]), []);
+  assert.deepEqual(eventApis([event('Profile API')]), ['Profile API']);
+  assert.deepEqual(
+    eventApis([event('Profile API v2'), event('Profile API'), event('Profile API v2'), event('Profile API')]),
+    ['Profile API', 'Profile API v2'],
+  );
 });
 
 test('event loading filters decoded scenarios and preserves scripts, console logs and errors', async (t) => {

@@ -20,6 +20,11 @@ export type MokapiRouteDefinition = string | MokapiRoute;
 
 export interface MokapiStoryParameters {
   handlerGroup?: string;
+  /**
+   * `info.title` of the OpenAPI contract the routes belong to. Without it, the
+   * routes apply to every API that Mokapi mocks, which matters when several
+   * APIs share a path.
+   */
   api?: string;
   scenario: string;
   routes: MokapiRouteDefinition[];
@@ -65,7 +70,7 @@ export interface MokapiEventResponse {
 export interface MokapiEvent {
   id: string;
   time: string;
-  traits: { path: string };
+  traits: { name: string; path: string };
   duration: number;
   data: {
     request: MokapiEventRequest;

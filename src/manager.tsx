@@ -5,7 +5,7 @@ import { addons, types, useGlobals, useParameter, useStorybookState } from 'stor
 import { UPDATE_GLOBALS } from 'storybook/internal/core-events';
 import { Button, Form, Link, ScrollArea } from 'storybook/internal/components';
 import { styled } from 'storybook/theming';
-import { eventsUrl, fetchEvents } from './mokapi-events.js';
+import { eventApis, eventsUrl, fetchEvents, panelSummary } from './mokapi-events.js';
 import { handlerMethod, methodLabel } from './forwarding.js';
 import {
   initialMockBackend,
@@ -75,6 +75,7 @@ const RequestUrl = styled.p(({ theme }) => ({
   overflowWrap: 'anywhere', fontFamily: theme.typography.fonts.mono,
 }));
 const ErrorMessage = styled.p(({ theme }) => ({ color: theme.color.negative }));
+const WarningMessage = styled.p(({ theme }) => ({ color: theme.color.warning }));
 
 interface DetailsProps {
   title: string;
@@ -151,7 +152,7 @@ interface HistoryState {
 }
 
 function useRequestHistory(
-  config: MokapiStoryParameters & { api: string },
+  config: MokapiStoryParameters,
   settings: ManagerPanelOptions,
   route: MokapiRouteDefinition,
   page: number,
@@ -228,7 +229,7 @@ function Pagination({ page, result, onPageChange }: PaginationProps) {
 }
 
 interface RequestHistoryProps {
-  config: MokapiStoryParameters & { api: string };
+  config: MokapiStoryParameters;
   settings: ManagerPanelOptions;
 }
 
@@ -238,6 +239,7 @@ function RequestHistory({ config, settings }: RequestHistoryProps) {
   const route = config.routes[routeIndex];
   const { historyState, refresh } = useRequestHistory(config, settings, route, page);
   const { loading, error, result } = historyState;
+  const apis = result ? eventApis(result.items) : [];
 
   const selectRoute = (event: ChangeEvent<HTMLSelectElement>): void => {
     setRouteIndex(Number(event.target.value));
@@ -262,13 +264,18 @@ function RequestHistory({ config, settings }: RequestHistoryProps) {
         <Button variant="outline" size="small" onClick={refresh}>Refresh</Button>
         <Link href={settings.dashboardUrl} target="_blank" rel="noreferrer">Open Mokapi dashboard</Link>
       </Toolbar>
-      <p>{`API: ${config.api} | Scenario: ${config.scenario}`}</p>
+      <p>{panelSummary(config.api, config.scenario)}</p>
       <p>Operation history filtered by scenario, not by an individual story execution. Auto-refresh every 2 seconds.</p>
       {loading && <p role="status">Loading Mokapi requests...</p>}
       {error && <ErrorMessage role="alert">{error}</ErrorMessage>}
       {result && (
         <div>
           <Pagination page={page} result={result} onPageChange={setPage} />
+          {apis.length > 1 && (
+            <WarningMessage role="note">
+              {`Requests from several APIs match this operation: ${apis.join(', ')}. Set \`api\` in createStoryScenarios(mocks, { api }) to show only one API.`}
+            </WarningMessage>
+          )}
           {!result.items.length && (
             <p>No requests for this scenario on this operation page. Run the story or check another page.</p>
           )}
@@ -300,8 +307,8 @@ function PanelMessage({ children, error = false }: PanelMessageProps) {
   );
 }
 
-function hasConfiguredApi(config: MokapiStoryParameters | undefined): config is MokapiStoryParameters & { api: string } {
-  return !!config?.api && !!config.routes?.length;
+function hasConfiguredRoutes(config: MokapiStoryParameters | undefined): config is MokapiStoryParameters {
+  return !!config?.routes?.length;
 }
 
 function Panel() {
@@ -316,10 +323,10 @@ function Panel() {
   if (globals.mockBackend !== 'mokapi') {
     return <PanelMessage>Select Mokapi in the toolbar to inspect request logs.</PanelMessage>;
   }
-  if (!hasConfiguredApi(config)) {
+  if (!hasConfiguredRoutes(config)) {
     return (
       <PanelMessage>
-        Configure an API title and routes with createStoryScenarios(mocks, {'{ api: "My API" }'}) to inspect requests.
+        No routes configured for this story. Use createStoryScenarios(mocks) or set parameters.mokapi.routes to inspect requests.
       </PanelMessage>
     );
   }

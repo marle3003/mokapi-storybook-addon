@@ -140,7 +140,8 @@ export const ServerError = {
 };
 ```
 
-`api` is the OpenAPI `info.title`. The request panel needs it.
+`api` is optional. It is the OpenAPI `info.title`. Set it when several APIs share
+a path. Without it, the routes apply to every API that Mokapi mocks.
 
 ### 5. Start Mokapi and Storybook
 
@@ -248,8 +249,18 @@ story execution. Requests without the scenario parameter are not shown.
   while other pages contain matches.
 - Errors appear in the panel and never block the story.
 
-The panel needs `parameters.mokapi.api`, set by the `api` option of
-`createStoryScenarios()`.
+The panel needs `parameters.mokapi.routes`. If a story has none, the panel only
+shows a hint. `createStoryScenarios()` sets the routes for you.
+
+The `api` option is optional. It narrows the history to one API:
+
+- With `api`, the panel shows only requests of that API. The header reads
+  `API: <api> | Scenario: <scenario>`.
+- Without `api`, the routes apply to every API that Mokapi mocks, which matters
+  when several APIs share a path. The panel shows the requests of all APIs with
+  that path. The header reads `Scenario: <scenario>`.
+- If the listed requests come from more than one API, the panel shows a warning
+  with the names of those APIs. Set `api` to show only one of them.
 
 ## Docs pages
 
@@ -311,7 +322,7 @@ Imported from `mokapi-storybook-addon/msw`.
 | Parameter              | Type                            | Default  | Description                                             |
 |------------------------|---------------------------------|----------|---------------------------------------------------------|
 | `scenarios`            | `Record<string, HttpHandler[]>` | –        | MSW handlers grouped by scenario name                   |
-| `options.api`          | `string`                        | not set  | OpenAPI `info.title`, needed by the request panel       |
+| `options.api`          | `string`                        | not set  | OpenAPI `info.title`. Optional, narrows the request panel to one API |
 | `options.handlerGroup` | `string`                        | not set  | MSW handler group managed by Mokapi, see [Keep other handlers local](#keep-other-handlers-local) |
 
 Returns one story parameters object (`msw` and `mokapi`) per scenario.
@@ -332,7 +343,7 @@ without the registered addon, for example in tests.
 |----------------|--------------------------------------------------|-------------------------------------------------|
 | `scenario`     | `string`                                         | Value of the scenario query parameter           |
 | `routes`       | `Array<string \| { method?, path }>`             | Routes to forward. A string means `GET`         |
-| `api`          | `string`                                         | OpenAPI `info.title`, needed by the panel       |
+| `api`          | `string`                                         | OpenAPI `info.title`. Optional, narrows the panel to one API |
 | `handlerGroup` | `string`                                         | MSW handler group to replace                    |
 
 ### TypeScript
@@ -370,6 +381,8 @@ it doesn't allow `CONNECT`, `TRACE` or `TRACK`.
 - Preview iframes must have the same origin as the Storybook manager.
 - The panel shows the request history per operation, not exactly the requests of
   one story execution.
+- The warning about several APIs only looks at the loaded page of the history.
+  APIs that appear only on other pages are not listed.
 - In Mokapi mode, mokapi-msw-adapter supports JSON responses only.
 
 ## License

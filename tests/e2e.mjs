@@ -14,6 +14,7 @@ const fixtureDirectory = fileURLToPath(new URL('./e2e/fixture/', import.meta.url
 const require = createRequire(import.meta.url);
 
 const API_TITLE = 'Profile API';
+const SECOND_API_TITLE = 'Profile API v2';
 const SCENARIO_PARAMETER = '__mockScenario';
 const BACKEND_TITLES = { msw: 'MSW (browser)', mokapi: 'Mokapi (OpenAPI validation)' };
 
@@ -197,6 +198,8 @@ const profileInDocsStory = (page, storyId) =>
 const showsText = (locator, text) => eventually(async () =>
   assert.equal(await locator.textContent({ timeout: 1000 }), text));
 
+const apiWarning = (page) => page.getByRole('note').filter({ hasText: /Requests from several APIs/ });
+
 const openMokapiPanel = (page) => page.getByRole('tab', { name: 'Mokapi' }).click();
 
 // Expands the newest request with the given status code and returns its open disclosure.
@@ -221,20 +224,26 @@ test('Storybook user switches stories between MSW and Mokapi and inspects the re
   let browser;
   let storybook;
   try {
-    const [apiPort, dashboardPort, storybookPort] = await unusedPorts(3);
+    const [apiPort, dashboardPort, storybookPort, secondApiPort] = await unusedPorts(4);
     const api = `http://localhost:${apiPort}`;
+    const secondApi = `http://localhost:${secondApiPort}`;
     const dashboard = `http://localhost:${dashboardPort}`;
 
     const contract = JSON.parse(await readFile(join(fixtureDirectory, 'openapi.json'), 'utf8'));
     contract.servers = [{ url: api }];
     await writeFile(join(directory, 'openapi.json'), JSON.stringify(contract));
+    // Same path as Profile API, so that a story without `api` matches the requests of both APIs.
+    const secondContract = { ...contract, info: { ...contract.info, title: SECOND_API_TITLE }, servers: [{ url: secondApi }] };
+    await writeFile(join(directory, 'openapi-v2.json'), JSON.stringify(secondContract));
     await writeFile(join(directory, 'mokapi.yaml'), mokapiConfig(dashboardPort, [
       join(directory, 'openapi.json'),
+      join(directory, 'openapi-v2.json'),
       join(fixtureDirectory, 'mocks/profile.js'),
     ]));
 
     stopMokapi = await startMokapi(directory, async () => {
       assert.equal((await fetch(`${api}/api/profile?${SCENARIO_PARAMETER}=success`)).status, 200);
+      assert.equal((await fetch(`${secondApi}/api/profile?${SCENARIO_PARAMETER}=readiness`)).status, 200);
       await getJson(`${dashboard}/api/info`);
     });
 
@@ -331,6 +340,34 @@ test('Storybook user switches stories between MSW and Mokapi and inspects the re
       await openMokapiPanel(page);
       await page.getByText('API: Profile API | Scenario: success').waitFor();
       await page.getByText(/^200 \| GET \/api\/profile/).first().waitFor();
+    });
+
+    // Must run before the multi-API scenario below: that one logs a request of the second API for
+    // the success scenario, which this story (no `api`) would then list and warn about.
+    await scenario('the panel lists the story request without an API option', async (page) => {
+      await open(page, { id: 'profile--no-api', backend: 'mokapi' });
+      await openMokapiPanel(page);
+      await page.getByText('Scenario: success', { exact: true }).waitFor();
+      assert.equal(await page.getByText(/^API:/).count(), 0);
+      await page.getByText(/^200 \| GET \/api\/profile/).first().waitFor();
+      assert.equal(await apiWarning(page).count(), 0);
+    });
+
+    await scenario('the panel warns when requests come from several APIs', async (page) => {
+      const response = await fetch(`${secondApi}/api/profile?${SCENARIO_PARAMETER}=success`);
+      assert.equal(response.status, 200);
+      await open(page, { id: 'profile--no-api', backend: 'mokapi' });
+      await openMokapiPanel(page);
+      const warning = apiWarning(page);
+      await warning.waitFor();
+      assert.match(await warning.textContent(), new RegExp(`${API_TITLE}, ${SECOND_API_TITLE}`));
+
+      // The story with `api` keeps its single-API header and shows no warning.
+      await open(page, { id: 'profile--success', backend: 'mokapi' });
+      await openMokapiPanel(page);
+      await page.getByText('API: Profile API | Scenario: success').waitFor();
+      await page.getByText(/^200 \| GET \/api\/profile/).first().waitFor();
+      assert.equal(await apiWarning(page).count(), 0);
     });
 
     await scenario('the panel shows the executed script and its console log for Success', async (page) => {
