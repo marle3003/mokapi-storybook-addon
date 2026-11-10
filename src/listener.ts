@@ -2,17 +2,23 @@ import type { Entry, PanelAction } from './results.js';
 import type { MokapiStoryParameters } from './types.js';
 import { classify, sendValidation, serializePair, type ValidationOutcome } from './validation.js';
 
-const MOCKED_RESPONSE_EVENT = 'response:mocked';
 const WORKER_MISSING = 'MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.';
 
-interface MockedResponse {
+interface StartedRequest {
   request: Request;
+  requestId: string;
+}
+
+interface MockedResponse extends StartedRequest {
   response: Response;
 }
 
 // The part of MSW's worker (or server) the addon needs. The addon imports nothing from MSW.
 interface MswWorker {
-  events: { on(event: typeof MOCKED_RESPONSE_EVENT, listener: (mocked: MockedResponse) => void): unknown };
+  events: {
+    on(event: 'request:start', listener: (started: StartedRequest) => void): unknown;
+    on(event: 'response:mocked', listener: (mocked: MockedResponse) => void): unknown;
+  };
 }
 
 export interface HookContext {
@@ -27,9 +33,18 @@ export interface HookOptions {
   dashboardUrl: string;
 }
 
+interface Render {
+  renderId: number;
+  api?: string;
+  sending: boolean;
+}
+
 // The listener lives as long as the worker, the story changes with every render: each hook run
-// overwrites this slot and the listener reads it.
-let current: { renderId: number; api?: string; sending: boolean } = { renderId: 0, sending: false };
+// replaces this slot and the listener reads it.
+let current: Render = { renderId: 0, sending: false };
+// A component may fetch again after a render, so the response can arrive when the next render has
+// already started. The request belongs to the render that was current when it started.
+const startedIn = new Map<string, Render>();
 let renderCount = 0;
 let capturedCount = 0;
 const observedWorkers = new WeakSet<object>();
@@ -48,9 +63,10 @@ function toPanelActions(outcome: ValidationOutcome, renderId: number, request: O
   return [{ type: 'result', renderId, entry }, notice];
 }
 
-function validate({ request, response }: MockedResponse, { emit, dashboardUrl }: HookOptions): void {
-  if (!current.sending) return;
-  const { renderId, api } = current;
+function validate({ request, response, requestId }: MockedResponse, { emit, dashboardUrl }: HookOptions): void {
+  const { renderId, api, sending } = startedIn.get(requestId) ?? current;
+  startedIn.delete(requestId);
+  if (!sending) return;
   const sequence = ++capturedCount;
   const time = Date.now();
   // Cloned now: the application gets the original pair and may read it any moment.
@@ -85,6 +101,7 @@ export function validationHook(context: HookContext, options: HookOptions): void
   options.emit({ type: 'render-started', storyId: context.id, renderId });
   if (!observedWorkers.has(worker)) {
     observedWorkers.add(worker);
-    worker.events.on(MOCKED_RESPONSE_EVENT, (mocked) => validate(mocked, options));
+    worker.events.on('request:start', ({ requestId }) => startedIn.set(requestId, current));
+    worker.events.on('response:mocked', (mocked) => validate(mocked, options));
   }
 }

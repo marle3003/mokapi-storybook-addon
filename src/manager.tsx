@@ -2,8 +2,10 @@
 // The Storybook manager provides `react` but not `react/jsx-runtime`, so this file must not use the automatic runtime.
 import React, { useSyncExternalStore, type ReactNode } from 'react';
 import { addons, types, useGlobals, useStorybookState } from 'storybook/manager-api';
+import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_FINISHED } from 'storybook/internal/core-events';
 import { Badge, Link, ScrollArea } from 'storybook/internal/components';
 import { styled } from 'storybook/theming';
+import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
 import {
   PANEL_EVENT,
   initialPanelState,
@@ -135,6 +137,20 @@ function Panel() {
 
 addons.register('mokapi', (api) => {
   api.on(PANEL_EVENT, receive);
+  let remount = nextRemount(initialRemountState, { type: 'initial', validation: api.getGlobals().mokapiValidation }).state;
+  const handle = (event: RemountEvent): void => {
+    const next = nextRemount(remount, event);
+    remount = next.state;
+    if (next.remount) api.emit(FORCE_REMOUNT, { storyId: next.remount });
+  };
+  // The preview announces the initial globals with SET_GLOBALS, later changes with GLOBALS_UPDATED.
+  api.on(SET_GLOBALS, ({ globals }: { globals: Record<string, unknown> }) => handle({ type: 'initial', validation: globals.mokapiValidation }));
+  api.on(GLOBALS_UPDATED, ({ globals }: { globals: Record<string, unknown> }) => {
+    const inStoryView = api.getUrlState().viewMode === 'story';
+    handle({ type: 'switched', validation: globals.mokapiValidation, storyId: inStoryView ? api.getCurrentStoryData()?.id : undefined });
+  });
+  api.on(STORY_CHANGED, () => handle({ type: 'story-changed' }));
+  api.on(STORY_FINISHED, ({ storyId }: { storyId: string }) => handle({ type: 'finished', storyId }));
   addons.add(PANEL_ID, {
     type: types.PANEL,
     title: () => <PanelTitle />,

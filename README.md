@@ -153,9 +153,10 @@ Open a story, switch on **Validate with Mokapi** in the toolbar and open the
 The toolbar toggle **Validate with Mokapi** sets the global `mokapiValidation`
 to `on` or `off`. The initial value comes from `defaultValidation`.
 
-Switching does not reload the preview. Storybook renders the story again with
-the new value. When you switch validation on, the story's requests are validated
-right away, and the panel list starts empty.
+Switching does not reload the preview. The addon remounts the current story, so
+a component that fetches on mount requests its data again. When you switch
+validation on, those requests are validated right away, and the panel list
+starts empty.
 
 ## Choosing the API
 

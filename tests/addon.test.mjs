@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { resolveOptions } from '../dist/index.js';
 import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '../dist/results.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
+import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { validationHook } from '../dist/listener.js';
 import { classify, sendValidation, serializePair } from '../dist/validation.js';
 
@@ -149,15 +150,15 @@ test('sending posts the JSON payload as a CORS simple request to the validate en
   assert.deepEqual(JSON.parse(init.body), payload);
 });
 
-// A stand-in for MSW's worker: events.on records the listeners, mocked() plays a mocked response.
+// A stand-in for MSW's worker: events.on records the listeners, started() and mocked() play the events.
 function fakeWorker() {
   const listeners = [];
+  const play = (name, event) => listeners.filter(({ event: registered }) => registered === name).map(({ listener }) => listener(event));
   return {
     registrations: listeners,
     events: { on: (event, listener) => listeners.push({ event, listener }) },
-    mocked(request, response) {
-      return listeners.map(({ listener }) => listener({ request, response, requestId: 'id' }));
-    },
+    started: (request, requestId = 'id') => play('request:start', { request, requestId }),
+    mocked: (request, response, requestId = 'id') => play('response:mocked', { request, response, requestId }),
   };
 }
 
@@ -187,14 +188,14 @@ function recorder() {
 
 const hookOptions = (panel) => ({ emit: panel.emit, dashboardUrl });
 
-test('hook registers one listener per worker across repeated runs', () => {
+test('hook registers its listeners once per worker across repeated runs', () => {
   const worker = fakeWorker();
   const panel = recorder();
   for (let i = 0; i < 3; i++) validationHook(storyContext(worker), hookOptions(panel));
-  assert.deepEqual(worker.registrations.map(({ event }) => event), ['response:mocked']);
+  assert.deepEqual(worker.registrations.map(({ event }) => event), ['request:start', 'response:mocked']);
   const otherWorker = fakeWorker();
   validationHook(storyContext(otherWorker), hookOptions(panel));
-  assert.equal(otherWorker.registrations.length, 1);
+  assert.equal(otherWorker.registrations.length, 2);
 });
 
 test('hook announces every render with the story and a new render id', () => {
@@ -237,6 +238,34 @@ test('listener sends the mocked pair with the API of the story and reports the r
   );
   assert.equal(typeof action.entry.sequence, 'number');
   assert.equal(typeof action.entry.time, 'number');
+});
+
+test('a response is attributed to the render that started the request, not to a later one', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker, { id: 'a--one', mokapi: { api: 'Profile API' } }), hookOptions(panel));
+  const firstRender = panel.actions[0].renderId;
+  worker.started(getProfile(), 'first');
+  validationHook(storyContext(worker, { id: 'a--one', mokapi: { api: 'Other API' } }), hookOptions(panel));
+  const result = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'first');
+  const action = await result;
+  assert.equal(action.renderId, firstRender);
+  assert.equal(JSON.parse(fetch.mock.calls[0].arguments[1].body).api, 'Profile API');
+  const stale = reducePanel(reducePanel(initialPanelState, panel.actions[1]), action);
+  assert.deepEqual(stale.entries, []);
+});
+
+test('a request that started while nothing was validated is not sent when the response comes later', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const worker = fakeWorker();
+  validationHook(storyContext(worker, { validation: 'off' }), hookOptions(recorder()));
+  worker.started(getProfile(), 'early');
+  validationHook(storyContext(worker), hookOptions(recorder()));
+  worker.mocked(getProfile(), jsonResponse(), 'early');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetch.mock.callCount(), 0);
 });
 
 test('listener leaves the original request and response unread for the application', async (t) => {
@@ -463,4 +492,35 @@ test('manager bundle imports only modules that the Storybook manager provides as
   const unsupported = imported.filter((specifier) => !specifier.startsWith('./') && !globalPackages.includes(specifier));
   assert.ok(imported.includes('react'));
   assert.deepEqual(unsupported, []);
+});
+
+const remountSteps = (...events) => events.reduce(
+  ({ state, remounts }, event) => {
+    const next = nextRemount(state, event);
+    return { state: next.state, remounts: next.remount ? [...remounts, next.remount] : remounts };
+  },
+  { state: initialRemountState, remounts: [] },
+).remounts;
+const initialValidation = (validation) => ({ type: 'initial', validation });
+const switched = (validation, storyId = 'a--one') => ({ type: 'switched', validation, storyId });
+const finished = (storyId = 'a--one') => ({ type: 'finished', storyId });
+
+test('a switch remounts the story once it has finished rendering, not before', () => {
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on')), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(initialValidation('on'), switched('off'), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished(), finished()), ['a--one']);
+});
+
+test('nothing is remounted without a switch of the value', () => {
+  assert.deepEqual(remountSteps(initialValidation('off'), finished()), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('off'), finished()), []);
+  assert.deepEqual(remountSteps(switched('on'), finished()), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), { type: 'switched', validation: 'on' }, finished()), []);
+});
+
+test('a story change or another story finishing cancels the pending remount', () => {
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), { type: 'story-changed' }, finished()), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished('a--two')), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished('a--two'), finished()), ['a--one']);
 });
