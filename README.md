@@ -8,7 +8,7 @@ responses. This addon sends each mocked request and response to Mokapi, which
 validates the pair against your OpenAPI contract. You keep your MSW setup and see
 in the story when a mock drifts from the API.
 
-- **One toolbar toggle:** turn validation on or off. Off sends nothing.
+- **One toolbar toggle:** an icon button that turns validation on or off. Off sends nothing.
 - **Your MSW setup stays yours:** nothing Mokapi-specific goes into `.storybook/preview.ts` or into your stories.
 - **Panel with badge:** every validated response shows as valid, invalid or not in the contract, with Mokapi's error messages. The tab shows how many are invalid.
 - **No change for the component:** it gets the MSW response unchanged and without delay.
@@ -145,13 +145,25 @@ npx mokapi ./openapi.json
 npx storybook dev
 ```
 
-Open a story, switch on **Validate with Mokapi** in the toolbar and open the
-**Mokapi** panel.
+Open a story, click the **Validate with Mokapi** icon button in the toolbar to
+switch validation on and open the **Mokapi** panel.
 
 ## Toggle
 
-The toolbar toggle **Validate with Mokapi** sets the global `mokapiValidation`
-to `on` or `off`. The initial value comes from `defaultValidation`.
+The toolbar has one icon button, **Validate with Mokapi**. One click switches
+validation on or off. The button is highlighted while validation is on, and its
+tooltip shows the state:
+
+- `Mokapi validation is on. Click to turn off.`
+- `Mokapi validation is off. Click to turn on.`
+
+The button sets the global `mokapiValidation` to `on` or `off`. The initial value
+comes from `defaultValidation`. With `defaultValidation: true`, the button starts
+highlighted. Assistive technology reads the button as a switch named "Validate
+with Mokapi" that is checked while validation is on.
+
+The button only appears in story view, not on Docs pages, because the story
+remount below only works there.
 
 Switching does not reload the preview. The addon remounts the current story, so
 a component that fetches on mount requests its data again. When you switch
@@ -242,6 +254,9 @@ Each story then runs in its own iframe with its own MSW worker. Inline stories
 share one worker, so the addon can't attribute their results to a story. See
 [Limitations](#limitations).
 
+The toolbar button is not shown on Docs pages. Switch validation on in story
+view first, or set `defaultValidation: true`.
+
 ## Static builds and deployment
 
 The browser calls Mokapi directly. The addon sets up no proxy, so `storybook dev`
@@ -270,7 +285,7 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 | Option              | Type      | Default                   | Description                                         |
 |---------------------|-----------|---------------------------|-----------------------------------------------------|
 | `dashboardUrl`      | `string`  | `'http://localhost:8080'` | Mokapi dashboard URL, must be reachable from the browser. A trailing slash is removed |
-| `defaultValidation` | `boolean` | `false`                   | Initial state of the toolbar toggle                 |
+| `defaultValidation` | `boolean` | `false`                   | Initial state of the toolbar toggle. `true` starts with validation on and the button highlighted |
 
 ### `parameters.mokapi`
 
@@ -286,7 +301,8 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 | `'on'`  | Validate the responses of the mocked requests   |
 | `'off'` | Validate nothing (default)                      |
 
-You can set the initial value with `defaultValidation`.
+The toolbar button switches the global. You can set the initial value with
+`defaultValidation`, or with the URL parameter `globals=mokapiValidation:on`.
 
 ### TypeScript
 

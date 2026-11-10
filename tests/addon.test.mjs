@@ -5,6 +5,7 @@ import { resolveOptions } from '../dist/index.js';
 import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '../dist/results.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
+import { toggleState } from '../dist/toggle.js';
 import { validationHook } from '../dist/listener.js';
 import { classify, sendValidation, serializePair } from '../dist/validation.js';
 
@@ -414,15 +415,19 @@ test('panel shows the results of the selected story only', () => {
   assert.deepEqual(resultsOfStory(state, 'a--two'), initialPanelState);
 });
 
-test('preview toolbar toggles validation and starts with the value of defaultValidation', async () => {
+test('preview starts with the value of defaultValidation and renders no Storybook dropdown', async () => {
   // Vite defines this constant at build time; defaultValidation true shows that it is read.
   globalThis.__MOKAPI_STORYBOOK_OPTIONS__ = { dashboardUrl: 'http://localhost:9090', defaultValidation: true };
   const { globalTypes, initialGlobals } = await import('../dist/preview.js');
-  const { mokapiValidation } = globalTypes;
-  assert.equal(mokapiValidation.description, 'Validate with Mokapi');
-  assert.equal(mokapiValidation.toolbar.dynamicTitle, true);
-  assert.deepEqual(mokapiValidation.toolbar.items.map(({ value }) => value), ['on', 'off']);
   assert.deepEqual(initialGlobals, { mokapiValidation: 'on' });
+  // A globalType with `toolbar` would make Storybook render its own dropdown next to the manager's toggle.
+  assert.equal(globalTypes, undefined);
+});
+
+test('toggle is pressed and turns validation off while it is on, otherwise it turns validation on', () => {
+  assert.deepEqual(toggleState('on'), { pressed: true, next: 'off', tooltip: 'Mokapi validation is on. Click to turn off.' });
+  assert.deepEqual(toggleState('off'), { pressed: false, next: 'on', tooltip: 'Mokapi validation is off. Click to turn on.' });
+  assert.deepEqual(toggleState(undefined), toggleState('off'));
 });
 
 test('preview registers a beforeEach that sends results to the panel channel and the configured dashboard', async (t) => {

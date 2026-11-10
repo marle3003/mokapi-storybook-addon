@@ -14,8 +14,11 @@ const fixtureDirectory = fileURLToPath(new URL('./e2e/fixture/', import.meta.url
 const require = createRequire(import.meta.url);
 
 const VALIDATE_PATH = '/api/services/http/validate';
-const TOGGLE_LABEL = 'Validate with Mokapi';
-const TOGGLE_TITLES = { on: 'Mokapi validation on', off: 'Mokapi validation off' };
+const TOGGLE_NAME = 'Validate with Mokapi';
+const TOGGLE_TOOLTIPS = {
+  on: 'Mokapi validation is on. Click to turn off.',
+  off: 'Mokapi validation is off. Click to turn on.',
+};
 
 // Returns count distinct free ports. All servers stay open until every port is
 // allocated, otherwise the OS may hand out the same port twice.
@@ -166,23 +169,29 @@ async function startStorybook({ port, env, browser }) {
   return { url, stop };
 }
 
-const toggleButton = (page) => page.getByRole('button', { name: TOGGLE_LABEL });
+// Storybook's ToggleButton renders a button with role "switch" and aria-checked (what `pressed` maps to).
+// Without a state it matches the switch in either state.
+const toggleButton = (page, state) => page.getByRole('switch', {
+  name: TOGGLE_NAME,
+  ...(state && { checked: state === 'on' }),
+});
 
 async function switchValidation(page, state) {
   await toggleButton(page).click();
-  await page.getByRole('option', { name: TOGGLE_TITLES[state] }).click();
-  // The toolbar title follows the selection; Storybook re-renders the story after that.
-  await page.getByRole('button', {
-    name: `${TOGGLE_LABEL} ${TOGGLE_TITLES[state]}`,
-    exact: true,
-  }).waitFor();
+  // Storybook re-renders the story after the global changed.
+  await toggleButton(page, state).waitFor();
 }
 
 // Opens a story or docs page like a Storybook user and optionally switches validation on.
 async function openStory(page, storybookUrl, { id, docs = false, validation = false }) {
   await page.goto(`${storybookUrl}/?path=/${docs ? 'docs' : 'story'}/${id}`);
-  await toggleButton(page).waitFor();
-  if (validation) await switchValidation(page, 'on');
+  // The toggle is shown in story view only.
+  if (!docs) await toggleButton(page).waitFor();
+  if (validation) {
+    // A click while Storybook is still starting is lost: the preview's initial globals override it.
+    await previewFrame(page).locator('#storybook-root > *').first().waitFor();
+    await switchValidation(page, 'on');
+  }
 }
 
 const previewFrame = (page) => page.frameLocator('#storybook-preview-iframe');
@@ -296,14 +305,23 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const preview = page.frame({ name: 'storybook-preview-iframe' });
       await preview.evaluate(() => { window.__marker = 'same document'; });
       await openMokapiPanel(page);
+      await toggleButton(page, 'off').hover();
+      await page.getByRole('tooltip').getByText(TOGGLE_TOOLTIPS.off).waitFor();
       await switchValidation(page, 'on');
+      // The tooltip closes on press while the pointer stays on the button; leave it so hover() enters again.
+      await page.mouse.move(0, 0);
+      await toggleButton(page, 'on').hover();
+      await page.getByRole('tooltip').getByText(TOGGLE_TOOLTIPS.on).waitFor();
+      // One plain switch, no dropdown: a leftover globalTypes toolbar would be a button with a popup.
+      assert.equal(await toggleButton(page).getAttribute('aria-haspopup'), null);
+      assert.equal(await page.getByRole('button', { name: TOGGLE_NAME }).count(), 0);
       await entries(page, 'valid').waitFor();
       assert.equal(await preview.evaluate(() => window.__marker), 'same document');
     });
 
     await scenario('defaultValidation true starts with validation on', async (page) => {
       await openStory(page, validatingStorybook.url, { id: 'profile--valid' });
-      await page.getByRole('button', { name: `${TOGGLE_LABEL} ${TOGGLE_TITLES.on}`, exact: true }).waitFor();
+      await toggleButton(page, 'on').waitFor();
       await openMokapiPanel(page);
       await entries(page, 'valid').waitFor();
     });
@@ -431,6 +449,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await openStory(page, validatingStorybook.url, { id: 'docs--docs', docs: true });
       await showsText(profileInDocsStory(page), 'Jane Doe');
       await eventually(async () => assert.ok(sent.length > 0, 'validation request from the story iframe'));
+      assert.equal(await toggleButton(page).count(), 0);
     });
   } finally {
     if (failureDirectory) console.error(`E2E failure artifacts kept in ${failureDirectory}`);

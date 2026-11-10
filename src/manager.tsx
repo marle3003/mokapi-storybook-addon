@@ -3,7 +3,8 @@
 import React, { useSyncExternalStore, type ReactNode } from 'react';
 import { addons, types, useGlobals, useStorybookState } from 'storybook/manager-api';
 import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_FINISHED } from 'storybook/internal/core-events';
-import { Badge, Link, ScrollArea } from 'storybook/internal/components';
+import { Badge, Link, ScrollArea, ToggleButton } from 'storybook/internal/components';
+import { VerifiedIcon } from '@storybook/icons';
 import { styled } from 'storybook/theming';
 import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
 import {
@@ -17,6 +18,7 @@ import {
   type PanelAction,
   type PanelState,
 } from './results.js';
+import { toggleState } from './toggle.js';
 import type { ResolvedAddonOptions } from './types.js';
 
 declare global {
@@ -26,6 +28,8 @@ declare global {
 }
 
 const PANEL_ID = 'mokapi/validation';
+const TOGGLE_ID = 'mokapi/validation-toggle';
+const TOGGLE_NAME = 'Validate with Mokapi';
 const STATUS_LABELS: Record<Entry['status'], string> = {
   valid: 'valid',
   invalid: 'invalid',
@@ -108,6 +112,23 @@ function EntryItem({ entry }: { entry: Entry }) {
   );
 }
 
+function ValidationToggle() {
+  const [globals, updateGlobals] = useGlobals();
+  const { pressed, next, tooltip } = toggleState(globals.mokapiValidation);
+  return (
+    <ToggleButton
+      padding="small"
+      variant="ghost"
+      ariaLabel={TOGGLE_NAME}
+      tooltip={tooltip}
+      pressed={pressed}
+      onClick={() => updateGlobals({ mokapiValidation: next })}
+    >
+      <VerifiedIcon />
+    </ToggleButton>
+  );
+}
+
 function PanelFrame({ children }: { children: ReactNode }) {
   return <PanelRoot><PanelScroll vertical><Content>{children}</Content></PanelScroll></PanelRoot>;
 }
@@ -119,7 +140,7 @@ function Panel() {
   const dashboardUrl = window.__MOKAPI_PANEL_OPTIONS__?.dashboardUrl;
   if (selectedPanel !== PANEL_ID || !layout.showPanel) return null;
   if (globals.mokapiValidation !== 'on') {
-    return <PanelFrame><p>Turn on validation with the "Validate with Mokapi" toggle in the toolbar.</p></PanelFrame>;
+    return <PanelFrame><p>{`Turn on validation with the "${TOGGLE_NAME}" toggle in the toolbar.`}</p></PanelFrame>;
   }
   return (
     <PanelFrame>
@@ -151,6 +172,12 @@ addons.register('mokapi', (api) => {
   });
   api.on(STORY_CHANGED, () => handle({ type: 'story-changed' }));
   api.on(STORY_FINISHED, ({ storyId }: { storyId: string }) => handle({ type: 'finished', storyId }));
+  addons.add(TOGGLE_ID, {
+    type: types.TOOL,
+    title: TOGGLE_NAME,
+    match: ({ viewMode, tabId }) => viewMode === 'story' && !tabId,
+    render: () => <ValidationToggle />,
+  });
   addons.add(PANEL_ID, {
     type: types.PANEL,
     title: () => <PanelTitle />,
