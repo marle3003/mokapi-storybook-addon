@@ -10,8 +10,8 @@ export default {
     {
       name: 'mokapi-storybook-addon',
       options: {
-        target: process.env.MOKAPI_TARGET,
         dashboardUrl: process.env.MOKAPI_DASHBOARD,
+        defaultValidation: process.env.MOKAPI_DEFAULT_VALIDATION === 'true',
       },
     },
   ],

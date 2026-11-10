@@ -1,7 +1,7 @@
 {
   "name": "mokapi-storybook-addon",
   "version": "0.0.0",
-  "description": "Switch Storybook between MSW and Mokapi contract validation",
+  "description": "Validate the MSW responses of your Storybook stories against your OpenAPI contract with Mokapi",
   "homepage": "https://mokapi.io",
   "repository": {
     "type": "git",
@@ -32,8 +32,9 @@
     "prepare": "npm run build",
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "eslint src tests --ext .ts,.tsx,.mjs",
+    "lint": "eslint src tests scripts --ext .ts,.tsx,.mjs",
     "test:e2e": "node --test tests/e2e.mjs",
+    "screenshot": "node scripts/screenshot.mjs",
     "check": "npm run build && npm run lint && npm run typecheck && npm test && npm run test:e2e",
     "prepack": "npm run build"
   },
@@ -45,7 +46,6 @@
     "eslint": "^9.39.0",
     "globals": "^16.5.0",
     "go-mokapi": "0.56.0",
-    "mokapi-msw-adapter": "0.1.0",
     "msw": "^2.15.0",
     "msw-storybook-addon": "^3.0.3",
     "playwright": "1.64.1",
@@ -58,18 +58,13 @@
   },
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
-    "./msw": { "types": "./dist/msw.d.ts", "import": "./dist/msw.js", "default": "./dist/msw.js" },
     "./preset": { "types": "./dist/preset.d.ts", "import": "./dist/preset.js", "default": "./dist/preset.js" }
   },
   "files": ["dist", "README.md", "LICENSE"],
   "peerDependencies": {
     "storybook": "^10.6.4",
-    "msw": "^2.15.0",
     "vite": ">=6",
     "react": ">=18"
-  },
-  "peerDependenciesMeta": {
-    "msw": { "optional": true }
   },
   "storybook": { "displayName": "Mokapi" }
 }

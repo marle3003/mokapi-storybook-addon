@@ -1,36 +1,35 @@
-import { graphql, http, HttpResponse } from 'msw';
-import { createMokapiLoader, createStoryScenarios } from 'mokapi-storybook-addon/msw';
 import type { MokapiAddonOptions } from 'mokapi-storybook-addon';
-import { mswLoader } from 'msw-storybook-addon/csf3';
-import type { LoaderFunction } from 'storybook/internal/types';
 import type { Parameters } from 'storybook/internal/csf';
+// @ts-expect-error The ./msw entry (createMokapiLoader, createStoryScenarios) was removed.
+import type {} from 'mokapi-storybook-addon/msw';
 
-const loader: LoaderFunction = createMokapiLoader(mswLoader());
-void loader;
-
-const scenarios = createStoryScenarios({
-  success: [http.get('/api/profile', () => HttpResponse.json({}))],
-  serverError: [http.get('/api/profile', () => HttpResponse.json({}, { status: 500 }))],
-});
-
-const name: 'success' = scenarios.success.mokapi.scenario;
-void name;
-const storyParameters: Parameters = { mokapi: scenarios.success.mokapi };
-void storyParameters;
-const parametersWithoutApi: Parameters = { mokapi: { scenario: 's', routes: ['/a'] } };
-void parametersWithoutApi;
-const parametersWithApi: Parameters = { mokapi: { api: 'Profile API', scenario: 's', routes: ['/a'] } };
-void parametersWithApi;
-const options: MokapiAddonOptions = { target: 'http://localhost:3000', proxyPath: '/custom-mokapi' };
+const options: MokapiAddonOptions = { dashboardUrl: 'http://localhost:8080', defaultValidation: true };
 void options;
+const defaultOptions: MokapiAddonOptions = {};
+void defaultOptions;
 
-// @ts-expect-error target has no default and must be set.
-const withoutTarget: MokapiAddonOptions = { proxyPath: '/custom-mokapi' };
-void withoutTarget;
-// @ts-expect-error Unknown scenario names must not be accepted.
-void scenarios.sucess;
-// @ts-expect-error The selected scenario retains its literal name.
-const wrongName: 'serverError' = scenarios.success.mokapi.scenario;
-void wrongName;
-// @ts-expect-error Only MSW HTTP handlers are supported.
-createStoryScenarios({ invalid: [graphql.query('Profile', () => HttpResponse.json({}))] });
+const withApi: Parameters = { mokapi: { api: 'Profile API' } };
+void withApi;
+const disabled: Parameters = { mokapi: { disable: true } };
+void disabled;
+const empty: Parameters = { mokapi: {} };
+void empty;
+
+// @ts-expect-error The addon no longer forwards requests to a target.
+const withTarget: MokapiAddonOptions = { target: 'http://localhost:3000' };
+void withTarget;
+// @ts-expect-error defaultValidation is a boolean.
+const stringValidation: MokapiAddonOptions = { defaultValidation: 'on' };
+void stringValidation;
+// @ts-expect-error The mock backend toggle was replaced by defaultValidation.
+const withBackend: MokapiAddonOptions = { defaultBackend: 'mokapi' };
+void withBackend;
+// @ts-expect-error Scenarios were removed.
+const withScenario: Parameters = { mokapi: { scenario: 'success' } };
+void withScenario;
+// @ts-expect-error Routes were removed.
+const withRoutes: Parameters = { mokapi: { routes: ['/api/profile'] } };
+void withRoutes;
+// @ts-expect-error disable is a boolean.
+const stringDisable: Parameters = { mokapi: { disable: 'yes' } };
+void stringDisable;

@@ -4,53 +4,50 @@ Check your Storybook mocks against your OpenAPI contract with
 [Mokapi](https://mokapi.io).
 
 Your stories already use [MSW](https://mswjs.io) handlers to mock API
-responses. This addon adds a toolbar switch to Storybook: run the handlers in
-the browser as usual, or send the same requests to Mokapi, which validates every
-response against your OpenAPI contract. You keep one set of mocks and see in the
-story when they drift from the API.
+responses. This addon sends each mocked request and response to Mokapi, which
+validates the pair against your OpenAPI contract. You keep your MSW setup and see
+in the story when a mock drifts from the API.
 
-- **One toolbar switch:** change between **MSW (browser)** and **Mokapi (OpenAPI validation)** for all stories.
-- **Same mocks:** stories reuse your existing MSW handlers. Together with
-  [mokapi-msw-adapter](https://github.com/marle3003/mokapi-msw-adapter), Mokapi
-  serves the same handlers.
-- **Request panel:** see each request in Storybook, with status, response body,
-  contract errors, script logs and errors.
-- **Your MSW setup stays yours:** the addon does not start MSW or Mokapi and does
-  not import your mock modules.
+- **One toolbar toggle:** turn validation on or off. Off sends nothing.
+- **Your MSW setup stays yours:** nothing Mokapi-specific goes into `.storybook/preview.ts` or into your stories.
+- **Panel with badge:** every validated response shows as valid, invalid or not in the contract, with Mokapi's error messages. The tab shows how many are invalid.
+- **No change for the component:** it gets the MSW response unchanged and without delay.
 
-![Storybook with the Mokapi toolbar switch and the Mokapi panel: the story's mock is missing the required email property, so Mokapi answers with HTTP 500 and the panel shows the validation error](docs/screenshot.png)
+![Storybook with Mokapi validation switched on: the story's MSW mock is missing the required email property, so the Mokapi panel lists the response as invalid with the error and the tab shows a badge](docs/screenshot.png)
 
 ## How it works
 
 ```
-                      Storybook toolbar: mockBackend
-                 ┌───────────────┴────────────────┐
-                 ▼                                ▼
-               msw                             mokapi
-     story handlers run in the      requests are forwarded through the
-     browser (MSW service worker)   Vite proxy /mokapi to Mokapi, with
-                                    ?__mockScenario=<scenario>
-                                                  │
-                                                  ▼
-                                    Mokapi answers with your shared
-                                    handlers (mokapi-msw-adapter) and
-                                    validates against OpenAPI
-                                                  │
-                                                  ▼
-                                    Mokapi panel shows the requests
-                                    (dashboard API /api/events)
+  Story renders, component calls fetch('/api/profile')
+                      │
+                      ▼
+        MSW service worker answers with your handler
+                      │ response:mocked event
+                      ▼
+          addon copies the request and response
+                      │ POST <dashboardUrl>/api/services/http/validate
+                      ▼
+        Mokapi finds the operation in your OpenAPI
+        contract and checks request and response
+                      │
+                      ▼
+        Mokapi panel in Storybook: valid / invalid /
+        not in contract, badge counts the invalid ones
 ```
 
-In MSW mode, nothing changes: `parameters.msw` goes to your MSW loader
-unchanged. In Mokapi mode, the addon replaces the story's handlers with
-forwarding handlers. They send each request to Mokapi and add the story's
-scenario as a query parameter. Mokapi's answer, including a validation error,
-goes back to your component unchanged.
+The addon registers a `beforeEach` hook in its own preview annotations. Storybook
+runs it after all loaders, so the MSW worker that your loader put in
+`context.msw` already exists. The hook listens to the worker's `response:mocked`
+event. It copies the request and the response, sends the copy to Mokapi and
+shows the result in the panel. The addon never starts Mokapi or MSW and imports
+nothing from `msw`.
+
+Only responses from your handlers are validated. Requests that you pass through
+with `passthrough()` or that no handler matches are not sent.
 
 ## Requirements
 
-- [Mokapi](https://mokapi.io/docs/get-started/installation) 0.53.0 or newer
-  (0.56.0 or newer with mokapi-msw-adapter)
+- [Mokapi](https://mokapi.io/docs/get-started/installation) 0.58.0 or newer
 - Storybook 10.6.4 or newer with the Vite builder and CSF3 stories
 - MSW 2.15.0 or newer
 - React 18 or newer (used for the addon panel only)
@@ -58,19 +55,17 @@ goes back to your component unchanged.
 
 ## Quick start
 
-This example assumes that your shared MSW handlers are in
-`src/mocks/profile.ts` and that Mokapi serves them with mokapi-msw-adapter. See
-its [Quick start](https://github.com/marle3003/mokapi-msw-adapter#quick-start)
-for the handler module, `mokapi.yaml` and the OpenAPI contract.
+This example assumes that your Storybook already uses MSW with
+`msw-storybook-addon`.
 
 ### 1. Install
 
 ```sh
-npm install --save-dev mokapi-storybook-addon msw msw-storybook-addon
+npm install --save-dev mokapi-storybook-addon
 ```
 
-Generate `mockServiceWorker.js` with MSW's standard setup
-(`npx msw init public`) and serve it from Storybook.
+Install Mokapi as well if you don't have it yet, for example, with
+`npm install --save-dev go-mokapi`.
 
 ### 2. Register the addon
 
@@ -78,193 +73,160 @@ Generate `mockServiceWorker.js` with MSW's standard setup
 // .storybook/main.ts
 export default {
   framework: '@storybook/react-vite',
-  staticDirs: ['../public'],
   addons: [
     {
       name: 'mokapi-storybook-addon',
       options: {
-        target: 'http://localhost:3000', // your API in Mokapi
+        dashboardUrl: 'http://localhost:8080', // default
+        defaultValidation: false,              // default
       },
     },
   ],
 };
 ```
 
-`target` is required: use the server URL from your OpenAPI contract. The
-addon adds the toolbar switch, the **Mokapi** panel and a Vite development
-proxy from `/mokapi` to `target`. The panel reads requests from the Mokapi
-dashboard at `http://localhost:8080`. If you run the dashboard elsewhere, set
-`dashboardUrl`.
+Both options are optional. Without options, the addon uses the Mokapi dashboard
+at `http://localhost:8080` and starts with validation off.
 
-### 3. Wrap your MSW loader
+### 3. Keep your MSW setup
+
+Your `.storybook/preview.ts` needs no addon code:
 
 ```ts
 // .storybook/preview.ts
 import { setupWorker } from 'msw/browser';
 import { mswLoader } from 'msw-storybook-addon/csf3';
-import { createMokapiLoader } from 'mokapi-storybook-addon/msw';
-
-const loadMsw = mswLoader(async () => {
-  const worker = setupWorker(); // Your initial handlers can go here.
-  await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
-  return worker;
-});
 
 export default {
-  loaders: [createMokapiLoader(loadMsw)],
-  parameters: { docs: { story: { inline: false, iframeHeight: '300px' } } },
+  loaders: [
+    mswLoader(async () => {
+      const worker = setupWorker();
+      await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
+      return worker;
+    }),
+  ],
 };
 ```
 
-Register only the wrapped loader. If you also register `loadMsw` directly, both
-reset the MSW handlers.
-
-`msw-storybook-addon` is optional: any loader that reads `parameters.msw` works.
-Your loader keeps creating, starting and resetting the worker.
+`msw-storybook-addon` is optional. If you use your own loader, it must set
+`context.msw` to the worker (or server) that answers your requests. The addon
+reads the worker from there.
 
 ### 4. Write stories
 
+Stories stay plain MSW:
+
 ```ts
 // src/Profile.stories.ts
-import { createStoryScenarios } from 'mokapi-storybook-addon/msw';
-import { scenarios as profileScenarios } from './mocks/profile';
+import { http, HttpResponse } from 'msw';
+import { Profile } from './Profile';
 
-const scenarios = createStoryScenarios(profileScenarios, { api: 'My API' });
+export default { title: 'Profile', component: Profile };
 
-export const Success = {
-  parameters: scenarios.success,
-};
-
-export const ServerError = {
-  parameters: scenarios.error,
+export const Valid = {
+  parameters: {
+    msw: {
+      handlers: [
+        http.get('/api/profile', () =>
+          HttpResponse.json({ name: 'Jane Doe', email: 'jane@example.com' }),
+        ),
+      ],
+    },
+  },
 };
 ```
-
-`api` is optional. It is the OpenAPI `info.title`. Set it when several APIs share
-a path. Without it, the routes apply to every API that Mokapi mocks.
 
 ### 5. Start Mokapi and Storybook
 
+Start Mokapi with your OpenAPI contract, then Storybook:
+
 ```sh
-npx mokapi
+npx mokapi ./openapi.json
 npx storybook dev
 ```
 
-Open a story and switch the toolbar from **MSW (browser)** to
-**Mokapi (OpenAPI validation)**. The story reloads and its requests go to Mokapi.
-Open the **Mokapi** panel to see them.
+Open a story, switch on **Validate with Mokapi** in the toolbar and open the
+**Mokapi** panel.
 
-## Scenarios
+## Toggle
 
-`createStoryScenarios()` turns your named handler lists into story parameters:
+The toolbar toggle **Validate with Mokapi** sets the global `mokapiValidation`
+to `on` or `off`. The initial value comes from `defaultValidation`.
 
-```ts
-scenarios.success
-// {
-//   msw: { handlers: [/* your handlers */] },
-//   mokapi: { scenario: 'success', api: 'My API', routes: [{ method: 'GET', path: '/api/profile' }] },
-// }
-```
+Switching does not reload the preview. Storybook renders the story again with
+the new value. When you switch validation on, the story's requests are validated
+right away, and the panel list starts empty.
 
-- Scenario names stay typed: `scenarios.sucess` is a TypeScript error.
-- Routes are read from the handlers' method and path. The resolvers do not run,
-  and duplicate routes are merged.
-- An empty handler list, a non-HTTP handler (for example GraphQL) or a path
-  pattern throws an error.
+## Choosing the API
 
-In Mokapi mode, each forwarded request carries `?__mockScenario=<scenario>`.
-Other query parameters, the method, headers, the body and the abort signal are
-kept. The adapter uses the parameter to pick the scenario.
+Mokapi can serve several APIs. Without `parameters.mokapi.api`, Mokapi searches
+all of them for an operation that matches the request's method and path.
 
-If you rename the parameter, configure the same name in both places:
+If more than one API matches, Mokapi can't choose. The addon then shows the
+request as **not in contract**, and the entry contains Mokapi's message with the
+names of the matching APIs. To fix it, set the API's `info.title`:
 
 ```ts
-// .storybook/main.ts
-options: { scenarioParameter: 'example' }
-
-// src/mocks/profile.ts
-register(scenarios, { api: 'My API', scenarioParameter: 'example' });
-```
-
-To add other parameters, spread the scenario:
-
-```ts
-export const Success = {
+// .storybook/preview.ts, a story file or a single story
+export default {
   parameters: {
-    ...scenarios.success,
-    docs: { description: { story: 'Successful profile request.' } },
+    mokapi: { api: 'Profile API' },
   },
 };
 ```
 
-You can also write `msw: { handlers }` and `mokapi: { scenario, routes }`
-yourself. Stories without `parameters.mokapi` always use MSW.
+`parameters.mokapi` is inherited from preview, component and story, as other
+Storybook parameters. A story can overwrite the value of the project.
 
-## Keep other handlers local
+If `api` names an API that Mokapi doesn't know, the panel shows a notice with
+Mokapi's message, see [Errors](#errors).
 
-By default, Mokapi mode replaces all story handlers. To keep unrelated handlers
-in the browser, for example for authentication, put the Mokapi handlers in a
-named MSW handler group:
+## Disabling a story
+
+A story that has no contract, for example a mock for a third-party API, can opt
+out:
 
 ```ts
-const scenarios = createStoryScenarios(profileScenarios, {
-  api: 'My API',
-  handlerGroup: 'profile',
-});
-
-export const Success = {
+export const ThirdParty = {
   parameters: {
-    ...scenarios.success,
-    msw: { handlers: { ...scenarios.success.msw.handlers, auth: authHandlers } },
+    mokapi: { disable: true },
+    msw: { handlers: [/* ... */] },
   },
 };
 ```
 
-In Mokapi mode, only the `profile` group is replaced. Other groups, including
-groups set to `null`, stay as they are. A missing group throws an error. Only
-the handlers in the selected group must fit
-[the adapter's supported MSW API](https://github.com/marle3003/mokapi-msw-adapter#supported-msw-api).
+The addon sends nothing to Mokapi for this story, also when the toggle is on.
 
-## Request panel
+## Panel and badge
 
-Select a story, switch the toolbar to Mokapi and open the **Mokapi** panel. For
-each request, it shows:
+The **Mokapi** panel shows the responses of the selected story since its last
+render. Switching to another story or rendering the story again clears the
+list. Each entry shows the method, URL, HTTP status of the response and time,
+and one of these results:
 
-- time, HTTP status and duration
-- request and response metadata and the response body, including contract
-  validation errors
-- executed scripts with console logs, parameters and errors
+| Result                 | Meaning                                                                          |
+|------------------------|----------------------------------------------------------------------------------|
+| valid                  | Request and response fit the contract                                            |
+| invalid                | The contract is violated. The entry lists each error with its `location` (for example `response.body`) and message |
+| not in contract        | Mokapi found no operation for the request, or several APIs match. The entry shows Mokapi's message |
+| Mokapi not reachable   | The request to Mokapi failed. The entry shows the URL and a hint to `dashboardUrl` |
 
-HTTP errors and script errors are shown separately: an intended HTTP 500 is not
-a contract violation.
+The tab title shows a badge with the number of invalid responses. Responses that
+are not in the contract and not-reachable entries are not counted.
 
-If the story has several routes, select an operation. The panel loads that
-operation's requests from Mokapi's dashboard API and keeps those whose
-scenario parameter matches the story. It shows the operation's history, not one
-story execution. Requests without the scenario parameter are not shown.
+Notices appear at the top of the panel when the addon can't validate:
 
-- The panel refreshes every two seconds while it is open in Mokapi mode.
-  **Refresh** reloads immediately.
-- Pages hold 25 requests and are filtered after loading, so a page can be empty
-  while other pages contain matches.
-- Errors appear in the panel and never block the story.
+- Mokapi is not reachable.
+- The Mokapi at `dashboardUrl` has no validation endpoint and must be updated to 0.58.0.
+- Mokapi reports a configuration error, for example an unknown `api`.
+- The MSW worker is missing from `context.msw`.
 
-The panel needs `parameters.mokapi.routes`. If a story has none, the panel only
-shows a hint. `createStoryScenarios()` sets the routes for you.
-
-The `api` option is optional. It narrows the history to one API:
-
-- With `api`, the panel shows only requests of that API. The header reads
-  `API: <api> | Scenario: <scenario>`.
-- Without `api`, the routes apply to every API that Mokapi mocks, which matters
-  when several APIs share a path. The panel shows the requests of all APIs with
-  that path. The header reads `Scenario: <scenario>`.
-- If the listed requests come from more than one API, the panel shows a warning
-  with the names of those APIs. Set `api` to show only one of them.
+The exact texts are listed in [Errors](#errors). With validation off, the panel
+shows a hint how to turn it on. The panel also links to the Mokapi dashboard.
 
 ## Docs pages
 
-Use Storybook's standard Docs page with stories that are not inline:
+Use Storybook's Docs page with stories that are not inline:
 
 ```ts
 // .storybook/preview.ts
@@ -276,29 +238,27 @@ export default {
 ```
 
 Each story then runs in its own iframe with its own MSW worker. Inline stories
-share one worker, so they can't show different scenarios.
-
-When you change the toolbar, the addon reloads every Storybook preview iframe,
-including the story iframes on a Docs page, with the new `mockBackend`. Other
-globals, query parameters and fragments are kept. Loaders wait for this
-synchronization, so a new iframe never uses the wrong backend. Without the
-Storybook manager, for example in a standalone preview, the `mockBackend` URL
-global or `defaultBackend` applies.
+share one worker, so the addon can't attribute their results to a story. See
+[Limitations](#limitations).
 
 ## Static builds and deployment
 
-`storybook build` has no Vite server, so the `/mokapi` proxy is missing. Choose
-one of these:
+The browser calls Mokapi directly. The addon sets up no proxy, so `storybook dev`
+and `storybook build` use the same `dashboardUrl`. It must be an address that the
+browser of every viewer can reach, not only the machine that builds Storybook.
 
-- Provide a reverse proxy for `/mokapi` (to `target`) and `/mokapi-dashboard`
-  (to `dashboardUrl`).
-- Set `browserUrl` at build time and enable CORS in Mokapi. The browser then
-  calls Mokapi directly.
+Mokapi answers the request with `Access-Control-Allow-Origin: *`, so no CORS
+setup is needed.
 
-The panel's dashboard link uses `dashboardUrl` directly, so use an address your
-users can reach. Only expose the dashboard API to trusted users: the request
-history can contain sensitive headers, bodies and script data. Don't put
-credentials in any option, because the options are visible in the browser.
+A Storybook served over HTTPS can't call Mokapi on a plain `http://` address other
+than `localhost`: browsers block this as mixed content. Chrome and Firefox allow
+`http://localhost`, but Chrome may ask for permission to access the local network,
+and other browsers may still block it. Put Mokapi behind an HTTPS reverse proxy
+and use its address as `dashboardUrl`, or run Storybook over HTTP while you
+validate.
+
+Only expose the dashboard API to trusted users. Don't put credentials in
+`dashboardUrl`, because the option is visible in the browser.
 
 ## API
 
@@ -306,84 +266,67 @@ credentials in any option, because the options are visible in the browser.
 
 Set in `.storybook/main.ts`. Restart Storybook after changing them.
 
-| Option              | Type                  | Default                 | Description                                                                 |
-|---------------------|-----------------------|-------------------------|-----------------------------------------------------------------------------|
-| `target`            | `string`              | required                | Mocked API in Mokapi, target of the `proxyPath` proxy. Not sent to the browser |
-| `dashboardUrl`      | `string`              | `'http://localhost:8080'` | Mokapi dashboard, target of the `<proxyPath>-dashboard` proxy and of the panel link |
-| `proxyPath`         | `string`              | `'/mokapi'`             | Local proxy path, removed before forwarding                                 |
-| `defaultBackend`    | `'msw' \| 'mokapi'`   | `'msw'`                 | Initial toolbar selection                                                   |
-| `scenarioParameter` | `string`              | `'__mockScenario'`      | Query parameter that selects the scenario                                   |
-| `browserUrl`        | `string`              | not set                 | Mokapi address used by the browser instead of `proxyPath`, see [Static builds and deployment](#static-builds-and-deployment) |
-
-### `createStoryScenarios(scenarios, options)`
-
-Imported from `mokapi-storybook-addon/msw`.
-
-| Parameter              | Type                            | Default  | Description                                             |
-|------------------------|---------------------------------|----------|---------------------------------------------------------|
-| `scenarios`            | `Record<string, HttpHandler[]>` | –        | MSW handlers grouped by scenario name                   |
-| `options.api`          | `string`                        | not set  | OpenAPI `info.title`. Optional, narrows the request panel to one API |
-| `options.handlerGroup` | `string`                        | not set  | MSW handler group managed by Mokapi, see [Keep other handlers local](#keep-other-handlers-local) |
-
-Returns one story parameters object (`msw` and `mokapi`) per scenario.
-
-### `createMokapiLoader(loader, options)`
-
-Imported from `mokapi-storybook-addon/msw`. Wraps your MSW loader. In Mokapi
-mode, the loader receives forwarding handlers in `parameters.msw`. The original
-parameters are restored afterwards, also when the loader throws. The loader's
-result and its changes to the context are kept.
-
-`options` (`proxyPath`, `scenarioParameter`, `browserUrl`) is only needed
-without the registered addon, for example in tests.
+| Option              | Type      | Default                   | Description                                         |
+|---------------------|-----------|---------------------------|-----------------------------------------------------|
+| `dashboardUrl`      | `string`  | `'http://localhost:8080'` | Mokapi dashboard URL, must be reachable from the browser. A trailing slash is removed |
+| `defaultValidation` | `boolean` | `false`                   | Initial state of the toolbar toggle                 |
 
 ### `parameters.mokapi`
 
-| Field          | Type                                             | Description                                     |
-|----------------|--------------------------------------------------|-------------------------------------------------|
-| `scenario`     | `string`                                         | Value of the scenario query parameter           |
-| `routes`       | `Array<string \| { method?, path }>`             | Routes to forward. A string means `GET`         |
-| `api`          | `string`                                         | OpenAPI `info.title`. Optional, narrows the panel to one API |
-| `handlerGroup` | `string`                                         | MSW handler group to replace                    |
+| Field     | Type      | Description                                                                 |
+|-----------|-----------|-----------------------------------------------------------------------------|
+| `api`     | `string`  | OpenAPI `info.title` of the story's API. Optional, see [Choosing the API](#choosing-the-api) |
+| `disable` | `boolean` | Sends nothing to Mokapi for this story                                      |
+
+### Global `mokapiValidation`
+
+| Value   | Description                                     |
+|---------|-------------------------------------------------|
+| `'on'`  | Validate the responses of the mocked requests   |
+| `'off'` | Validate nothing (default)                      |
+
+You can set the initial value with `defaultValidation`.
 
 ### TypeScript
 
 Type definitions are included. Importing `mokapi-storybook-addon` adds
 `mokapi` to Storybook's `Parameters` type.
 
-### HTTP methods
-
-All MSW HTTP methods are forwarded: the `http.*` helpers, `http.all()` and
-string or RegExp methods in `new HttpHandler(...)`, for example `QUERY`. RegExp
-methods are stored as `{ source, flags }` in the story parameters. Mokapi checks
-the actual method against the contract. The browser's Fetch API still applies:
-it doesn't allow `CONNECT`, `TRACE` or `TRACK`.
-
 ## Errors
 
-- If Mokapi can't be reached, the addon logs the error and answers with HTTP 502.
-  It never falls back to the local mocks.
-- HTTP errors from Mokapi, including contract validation errors, go to the
-  component unchanged.
-- Invalid options or story parameters throw an error that starts with `Mokapi:`.
-- If the preview gets no answer from the Storybook manager within 10 seconds,
-  loaders fail with `backend synchronization timed out`. Reload Storybook.
+Invalid options throw an error when Storybook starts:
+
+- `Mokapi: dashboardUrl must be an HTTP(S) URL.`
+- `Mokapi: defaultValidation must be true or false.`
+
+The panel shows these notices. None of them stops the story, and none counts in
+the badge:
+
+| Notice | Cause and fix |
+|--------|---------------|
+| `Mokapi is not reachable at <url>. Check the dashboardUrl option and that Mokapi is running.` | The request failed. Start Mokapi or fix `dashboardUrl` |
+| `Mokapi at <url> does not support /api/services/http/validate. Update Mokapi to 0.58.0.` | Your Mokapi is older than 0.58.0 |
+| Mokapi's message, for example for an unknown API | `parameters.mokapi.api` names an API that Mokapi doesn't serve. Use the `info.title` of your contract |
+| `Mokapi answered HTTP <status>: <message>` | Any other unexpected answer from Mokapi. Mokapi's message is added if it sent one |
+| ``MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.`` | The story has no MSW worker. Use `mswLoader` or set `context.msw` in your own loader |
+
+The notice about a missing worker only appears while validation is on. With
+validation off, a story without a worker runs without any message.
 
 ## Limitations
 
-- Only exact relative paths. Path patterns such as `/users/:id` or `/files/*`,
-  query strings in routes and absolute URLs are not supported.
-- Only MSW HTTP handlers can be forwarded. To keep GraphQL or WebSocket
-  handlers in Mokapi mode, put them in another handler group, see
-  [Keep other handlers local](#keep-other-handlers-local).
+- Inline Docs stories share one MSW worker, so their results can't be attributed
+  to a story. Use `inline: false`, see [Docs pages](#docs-pages).
+- Only responses from MSW handlers are validated, not `passthrough()` or
+  unhandled requests.
+- The addon needs a worker (or server) with MSW's `events.on` in `context.msw`.
+- Mokapi validates the request and response pair against the contract. It does
+  not run your handlers.
 - Storybook with Vite and CSF3 only. Webpack and CSF Next are not supported.
   Only React projects are tested.
-- Preview iframes must have the same origin as the Storybook manager.
-- The panel shows the request history per operation, not exactly the requests of
-  one story execution.
-- The warning about several APIs only looks at the loaded page of the history.
-  APIs that appear only on other pages are not listed.
-- In Mokapi mode, mokapi-msw-adapter supports JSON responses only.
+- A Storybook served over HTTPS can't reach Mokapi on a plain `http://` address, see
+  [Static builds and deployment](#static-builds-and-deployment).
+- Requires Mokapi 0.58.0 or newer, see [Requirements](#requirements).
 
 ## License
 

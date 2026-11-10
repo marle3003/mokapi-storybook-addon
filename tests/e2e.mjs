@@ -13,10 +13,9 @@ import { chromium } from 'playwright';
 const fixtureDirectory = fileURLToPath(new URL('./e2e/fixture/', import.meta.url));
 const require = createRequire(import.meta.url);
 
-const API_TITLE = 'Profile API';
-const SECOND_API_TITLE = 'Profile API v2';
-const SCENARIO_PARAMETER = '__mockScenario';
-const BACKEND_TITLES = { msw: 'MSW (browser)', mokapi: 'Mokapi (OpenAPI validation)' };
+const VALIDATE_PATH = '/api/services/http/validate';
+const TOGGLE_LABEL = 'Validate with Mokapi';
+const TOGGLE_TITLES = { on: 'Mokapi validation on', off: 'Mokapi validation off' };
 
 // Returns count distinct free ports. All servers stay open until every port is
 // allocated, otherwise the OS may hand out the same port twice.
@@ -38,8 +37,7 @@ async function unusedPorts(count) {
   }
 }
 
-// Absolute filenames, because the mock script and the OpenAPI file live in different directories.
-const mokapiConfig = (dashboardPort, filenames) => `api:
+const mokapiConfig = (dashboardPort, filename) => `api:
   port: ${dashboardPort}
 health:
   enabled: false
@@ -49,18 +47,8 @@ mcp:
 providers:
   file:
     filenames:
-${filenames.map((filename) => `      - ${filename}`).join('\n')}
-javascript:
-  modules:
-    aliases:
-      msw: mokapi-msw-adapter
+      - ${filename}
 `;
-
-const getJson = async (url) => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(1000) });
-  assert.equal(response.status, 200, url);
-  return response.json();
-};
 
 // Retries assertion until it passes or the timeout is over, then throws its last error.
 async function eventually(assertion, timeout = 15000) {
@@ -75,11 +63,19 @@ async function eventually(assertion, timeout = 15000) {
   }
 }
 
-// Starts Mokapi in directory and waits until isReady() passes, i.e. the mock script has registered.
-async function startMokapi(directory, isReady) {
+// MOKAPI_BIN points to a local Mokapi build (the endpoint ships with 0.58.0); otherwise the go-mokapi package is used.
+function mokapiBinary() {
+  if (process.env.MOKAPI_BIN) return process.env.MOKAPI_BIN;
   const mokapiRequire = createRequire(require.resolve('go-mokapi/package.json'));
-  const binary = mokapiRequire(`@go-mokapi/${process.platform}-${process.arch}`);
-  const child = spawn(binary, [], { cwd: directory, stdio: 'inherit' });
+  return mokapiRequire(`@go-mokapi/${process.platform}-${process.arch}`);
+}
+
+// Starts Mokapi in directory and waits until isReady() passes, i.e. the contract is loaded.
+async function startMokapi(directory, isReady) {
+  // Mokapi rejects unknown MOKAPI_* environment variables, so MOKAPI_BIN must not reach it.
+  const env = { ...process.env };
+  delete env.MOKAPI_BIN;
+  const child = spawn(mokapiBinary(), [], { cwd: directory, env, stdio: 'inherit' });
   let startupError;
   child.on('error', (error) => { startupError = error; });
   const stopped = new Promise((resolve) => {
@@ -159,7 +155,7 @@ async function startStorybook({ port, env, browser }) {
   try {
     const page = await browser.newPage();
     try {
-      await page.goto(`${url}/iframe.html?id=profile--success&viewMode=story`);
+      await page.goto(`${url}/iframe.html?id=profile--valid&viewMode=story`);
       await page.getByTestId('profile').waitFor({ timeout: Math.max(1000, deadline - Date.now()) });
     } finally {
       await page.close();
@@ -170,104 +166,94 @@ async function startStorybook({ port, env, browser }) {
   return { url, stop };
 }
 
-const TOOLBAR_LABEL = 'Execute shared mocks in MSW or validate them with Mokapi';
-const toolbarButton = (page) => page.getByRole('button', { name: TOOLBAR_LABEL });
+const toggleButton = (page) => page.getByRole('button', { name: TOGGLE_LABEL });
 
-async function switchBackend(page, backend) {
-  await toolbarButton(page).click();
-  await page.getByRole('option', { name: BACKEND_TITLES[backend] }).click();
-  // The toolbar title follows the selection; the preview iframe reloads after that.
+async function switchValidation(page, state) {
+  await toggleButton(page).click();
+  await page.getByRole('option', { name: TOGGLE_TITLES[state] }).click();
+  // The toolbar title follows the selection; Storybook re-renders the story after that.
   await page.getByRole('button', {
-    name: `${TOOLBAR_LABEL} ${BACKEND_TITLES[backend]}`,
+    name: `${TOGGLE_LABEL} ${TOGGLE_TITLES[state]}`,
     exact: true,
   }).waitFor();
 }
 
-// Opens a story or docs page like a Storybook user (MSW is the default) and optionally switches the backend.
-async function openStory(page, storybookUrl, { id, docs = false, backend = 'msw' }) {
+// Opens a story or docs page like a Storybook user and optionally switches validation on.
+async function openStory(page, storybookUrl, { id, docs = false, validation = false }) {
   await page.goto(`${storybookUrl}/?path=/${docs ? 'docs' : 'story'}/${id}`);
-  await toolbarButton(page).waitFor();
-  if (backend !== 'msw') await switchBackend(page, backend);
+  await toggleButton(page).waitFor();
+  if (validation) await switchValidation(page, 'on');
 }
 
 const previewFrame = (page) => page.frameLocator('#storybook-preview-iframe');
 const profileInPreview = (page) => previewFrame(page).getByTestId('profile');
-const profileInDocsStory = (page, storyId) =>
-  previewFrame(page).frameLocator(`#iframe--${storyId}`).first().getByTestId('profile');
+const profileInDocsStory = (page) => previewFrame(page).frameLocator('#iframe--docs--valid').first().getByTestId('profile');
 
 const showsText = (locator, text) => eventually(async () =>
   assert.equal(await locator.textContent({ timeout: 1000 }), text));
 
-const apiWarning = (page) => page.getByRole('note').filter({ hasText: /Requests from several APIs/ });
+const mokapiTab = (page) => page.getByRole('tab', { name: /^Mokapi/ });
+const openMokapiPanel = (page) => mokapiTab(page).click();
 
-const openMokapiPanel = (page) => page.getByRole('tab', { name: 'Mokapi' }).click();
+const entries = (page, status) =>
+  page.locator(`[data-testid="mokapi-entry"]${status ? `[data-status="${status}"]` : ''}`);
+const notice = (page, text) => page.getByRole('alert').filter({ hasText: text });
 
-// Expands the newest request with the given status code and returns its open disclosure.
-// The panel polls and inserts newer requests at the top, so the result is scoped to the open entry.
-async function openRequest(page, statusCode) {
-  const summary = page.getByText(new RegExp(`^${statusCode} \\| GET /api/profile`));
-  await summary.first().click();
-  return page.locator('details[open]').filter({ has: summary }).first();
+// The badge is part of the tab title; without invalid responses the title is just "Mokapi".
+const badgeOf = async (page) => (await mokapiTab(page).textContent()).replace('Mokapi', '').trim();
+
+// Records the requests the preview sends to Mokapi's validate endpoint.
+function trackValidationRequests(page, dashboard) {
+  const requests = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url() === `${dashboard}${VALIDATE_PATH}`) requests.push(request);
+  });
+  return requests;
 }
 
-// Expands the nested disclosure with the given title inside a request and returns it.
-async function openDetails(request, title) {
-  const details = request.locator('details').filter({ has: request.page().getByText(title, { exact: true }) });
-  await details.getByText(title, { exact: true }).click();
-  return details;
+// Validation runs after the response, so no request may show up shortly after the story rendered.
+async function assertNothingSent(requests) {
+  await setTimeout(1000);
+  assert.equal(requests.length, 0);
 }
 
-test('Storybook user switches stories between MSW and Mokapi and inspects the requests', { timeout: 300000 }, async (t) => {
+test('Storybook user validates the MSW responses of a story against the OpenAPI contract', { timeout: 300000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'mokapi-storybook-e2e-'));
   let failureDirectory;
   let stopMokapi;
   let browser;
-  let storybook;
+  const storybooks = [];
   try {
-    const [apiPort, dashboardPort, storybookPort, secondApiPort] = await unusedPorts(4);
-    const api = `http://localhost:${apiPort}`;
-    const secondApi = `http://localhost:${secondApiPort}`;
+    const [apiPort, dashboardPort, storybookPort, validatingStorybookPort] = await unusedPorts(4);
     const dashboard = `http://localhost:${dashboardPort}`;
 
+    // Mokapi takes the HTTP port from the servers URL.
     const contract = JSON.parse(await readFile(join(fixtureDirectory, 'openapi.json'), 'utf8'));
-    contract.servers = [{ url: api }];
+    contract.servers = [{ url: `http://localhost:${apiPort}` }];
     await writeFile(join(directory, 'openapi.json'), JSON.stringify(contract));
-    // Same path as Profile API, so that a story without `api` matches the requests of both APIs.
-    const secondContract = { ...contract, info: { ...contract.info, title: SECOND_API_TITLE }, servers: [{ url: secondApi }] };
-    await writeFile(join(directory, 'openapi-v2.json'), JSON.stringify(secondContract));
-    await writeFile(join(directory, 'mokapi.yaml'), mokapiConfig(dashboardPort, [
-      join(directory, 'openapi.json'),
-      join(directory, 'openapi-v2.json'),
-      join(fixtureDirectory, 'mocks/profile.js'),
-    ]));
+    await writeFile(join(directory, 'mokapi.yaml'), mokapiConfig(dashboardPort, join(directory, 'openapi.json')));
 
+    // Ready when the contract is loaded, which also fails early with a Mokapi without the endpoint.
     stopMokapi = await startMokapi(directory, async () => {
-      assert.equal((await fetch(`${api}/api/profile?${SCENARIO_PARAMETER}=success`)).status, 200);
-      assert.equal((await fetch(`${secondApi}/api/profile?${SCENARIO_PARAMETER}=readiness`)).status, 200);
-      await getJson(`${dashboard}/api/info`);
-    });
-
-    // Requests Mokapi received for the scenario, from the dashboard API the request panel uses.
-    const profileRequests = async (scenario) => {
-      const query = new URLSearchParams({
-        'traits[namespace]': 'http', 'traits[name]': API_TITLE, size: '100',
+      const response = await fetch(`${dashboard}${VALIDATE_PATH}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          request: { method: 'GET', url: '/api/profile' },
+          response: { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: '{"name":"a","email":"b"}' },
+        }),
+        signal: AbortSignal.timeout(1000),
       });
-      const { items } = await getJson(`${dashboard}/api/events?${query}`);
-      return items.filter((event) =>
-        new URL(event.data.request.url).searchParams.get(SCENARIO_PARAMETER) === scenario);
-    };
-    const requestCount = async (scenario) => (await profileRequests(scenario)).length;
-    const waitForRequestAfter = (scenario, countBefore) => eventually(async () =>
-      assert.ok(await requestCount(scenario) > countBefore, `Mokapi request for ${scenario}`));
-    // Mokapi's readiness check already requested the success scenario once.
-    const readinessRequests = await requestCount('success');
+      assert.equal((await response.json()).valid, true);
+    });
 
     browser = await chromium.launch();
-    storybook = await startStorybook({
-      port: storybookPort,
-      env: { MOKAPI_TARGET: api, MOKAPI_DASHBOARD: dashboard },
-      browser,
-    });
+    const startFixtureStorybook = async (port, env) => {
+      const storybook = await startStorybook({ port, env: { MOKAPI_DASHBOARD: dashboard, ...env }, browser });
+      storybooks.push(storybook);
+      return storybook;
+    };
+    const storybook = await startFixtureStorybook(storybookPort, {});
+    const validatingStorybook = await startFixtureStorybook(validatingStorybookPort, { MOKAPI_DEFAULT_VALIDATION: 'true' });
 
     const keepFailureArtifacts = async (name, page, consoleLines) => {
       failureDirectory ??= await mkdtemp(join(tmpdir(), 'mokapi-storybook-e2e-failure-'));
@@ -285,7 +271,7 @@ test('Storybook user switches stories between MSW and Mokapi and inspects the re
       page.on('console', (message) => consoleLines.push(`[${message.type()}] ${message.text()}`));
       page.on('pageerror', (error) => consoleLines.push(`[pageerror] ${error.message}`));
       try {
-        await run(page);
+        await run(page, context);
       } catch (error) {
         await keepFailureArtifacts(name, page, consoleLines);
         throw error;
@@ -295,113 +281,161 @@ test('Storybook user switches stories between MSW and Mokapi and inspects the re
     });
     const open = (page, options) => openStory(page, storybook.url, options);
 
-    await scenario('MSW is the default: Success shows the MSW data and Mokapi receives no request', async (page) => {
-      await open(page, { id: 'profile--success' });
+    await scenario('validation is off by default: the story renders and nothing is sent to Mokapi', async (page) => {
+      const sent = trackValidationRequests(page, dashboard);
+      await open(page, { id: 'profile--valid' });
       await showsText(profileInPreview(page), 'Jane Doe');
-      assert.equal(await requestCount('success'), readinessRequests);
+      await openMokapiPanel(page);
+      await page.getByText(/Turn on validation/).waitFor();
+      await assertNothingSent(sent);
     });
 
-    await scenario('switching the toolbar to Mokapi reloads the preview and sends the request to Mokapi', async (page) => {
-      const before = await requestCount('success');
-      await open(page, { id: 'profile--success' });
-      await switchBackend(page, 'mokapi');
+    await scenario('switching validation on validates the story without reloading the preview', async (page) => {
+      await open(page, { id: 'profile--valid' });
       await showsText(profileInPreview(page), 'Jane Doe');
-      await waitForRequestAfter('success', before);
+      const preview = page.frame({ name: 'storybook-preview-iframe' });
+      await preview.evaluate(() => { window.__marker = 'same document'; });
+      await openMokapiPanel(page);
+      await switchValidation(page, 'on');
+      await entries(page, 'valid').waitFor();
+      assert.equal(await preview.evaluate(() => window.__marker), 'same document');
     });
 
-    await scenario('switching back to MSW sends no further requests to Mokapi', async (page) => {
-      const before = await requestCount('success');
-      await open(page, { id: 'profile--success', backend: 'mokapi' });
-      await waitForRequestAfter('success', before);
-      await switchBackend(page, 'msw');
+    await scenario('defaultValidation true starts with validation on', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'profile--valid' });
+      await page.getByRole('button', { name: `${TOGGLE_LABEL} ${TOGGLE_TITLES.on}`, exact: true }).waitFor();
+      await openMokapiPanel(page);
+      await entries(page, 'valid').waitFor();
+    });
+
+    await scenario('a valid response is listed as valid and does not show a badge', async (page) => {
+      await open(page, { id: 'profile--valid', validation: true });
+      await openMokapiPanel(page);
+      const valid = entries(page, 'valid');
+      await valid.waitFor();
+      assert.match(await valid.textContent(), /GET \/api\/profile/);
+      assert.match(await valid.textContent(), /200/);
+      assert.equal(await entries(page).count(), 1);
+      assert.equal(await badgeOf(page), '');
+      // The component gets the MSW response unchanged.
       await showsText(profileInPreview(page), 'Jane Doe');
-      const afterSwitch = await requestCount('success');
-      for (let i = 0; i < 5; i++) {
-        await setTimeout(300);
-        assert.equal(await requestCount('success'), afterSwitch);
-      }
     });
 
-    await scenario('Invalid shows the data in MSW mode and HTTP 500 in Mokapi mode', async (page) => {
-      await open(page, { id: 'profile--invalid' });
+    await scenario('an invalid response shows location and message of the contract violation and a badge', async (page) => {
+      await open(page, { id: 'profile--invalid', validation: true });
+      await openMokapiPanel(page);
+      const invalid = entries(page, 'invalid');
+      await invalid.waitFor();
+      assert.match(await invalid.textContent(), /response\.body/);
+      assert.match(await invalid.textContent(), /required properties are missing: email/);
+      await eventually(async () => assert.equal(await badgeOf(page), '1'));
       await showsText(profileInPreview(page), 'Jane Doe');
-      await switchBackend(page, 'mokapi');
-      await showsText(profileInPreview(page), 'HTTP 500');
     });
 
-    await scenario('the panel asks to select Mokapi while MSW is active', async (page) => {
-      await open(page, { id: 'profile--success' });
+    await scenario('a request that matches no operation is not in contract and does not count in the badge', async (page) => {
+      await open(page, { id: 'profile--not-in-contract', validation: true });
       await openMokapiPanel(page);
-      await page.getByText('Select Mokapi in the toolbar to inspect request logs.').waitFor();
+      const notInContract = entries(page, 'not-in-contract');
+      await notInContract.waitFor();
+      assert.match(await notInContract.textContent(), /no operation found for GET \/api\/settings/);
+      assert.equal(await badgeOf(page), '');
     });
 
-    await scenario('the panel lists the story request with API, scenario and status in Mokapi mode', async (page) => {
-      await open(page, { id: 'profile--success', backend: 'mokapi' });
+    await scenario('handlers with path patterns are validated against the contract path', async (page) => {
+      await open(page, { id: 'profile--path-pattern', validation: true });
       await openMokapiPanel(page);
-      await page.getByText('API: Profile API | Scenario: success').waitFor();
-      await page.getByText(/^200 \| GET \/api\/profile/).first().waitFor();
+      const valid = entries(page, 'valid');
+      await valid.waitFor();
+      assert.match(await valid.textContent(), /GET \/api\/users\/42/);
     });
 
-    // Must run before the multi-API scenario below: that one logs a request of the second API for
-    // the success scenario, which this story (no `api`) would then list and warn about.
-    await scenario('the panel lists the story request without an API option', async (page) => {
-      await open(page, { id: 'profile--no-api', backend: 'mokapi' });
+    await scenario('the request body of a POST is validated', async (page) => {
+      await open(page, { id: 'profile--post-invalid-body', validation: true });
       await openMokapiPanel(page);
-      await page.getByText('Scenario: success', { exact: true }).waitFor();
-      assert.equal(await page.getByText(/^API:/).count(), 0);
-      await page.getByText(/^200 \| GET \/api\/profile/).first().waitFor();
-      assert.equal(await apiWarning(page).count(), 0);
+      const invalid = entries(page, 'invalid');
+      await invalid.waitFor();
+      assert.match(await invalid.textContent(), /POST \/api\/profile/);
+      assert.match(await invalid.textContent(), /request\.body/);
+      assert.match(await invalid.textContent(), /required properties are missing: name/);
+
+      await open(page, { id: 'profile--post-valid', validation: true });
+      await entries(page, 'valid').waitFor();
     });
 
-    await scenario('the panel warns when requests come from several APIs', async (page) => {
-      const response = await fetch(`${secondApi}/api/profile?${SCENARIO_PARAMETER}=success`);
-      assert.equal(response.status, 200);
-      await open(page, { id: 'profile--no-api', backend: 'mokapi' });
+    await scenario('a story with disable true sends nothing', async (page) => {
+      const sent = trackValidationRequests(page, dashboard);
+      await open(page, { id: 'profile--disabled', validation: true });
+      await showsText(profileInPreview(page), 'Jane Doe');
       await openMokapiPanel(page);
-      const warning = apiWarning(page);
-      await warning.waitFor();
-      assert.match(await warning.textContent(), new RegExp(`${API_TITLE}, ${SECOND_API_TITLE}`));
-
-      // The story with `api` keeps its single-API header and shows no warning.
-      await open(page, { id: 'profile--success', backend: 'mokapi' });
-      await openMokapiPanel(page);
-      await page.getByText('API: Profile API | Scenario: success').waitFor();
-      await page.getByText(/^200 \| GET \/api\/profile/).first().waitFor();
-      assert.equal(await apiWarning(page).count(), 0);
+      await assertNothingSent(sent);
+      assert.equal(await entries(page).count(), 0);
     });
 
-    await scenario('the panel shows the executed script and its console log for Success', async (page) => {
-      await open(page, { id: 'profile--success', backend: 'mokapi' });
+    await scenario('passthrough responses are not validated', async (page) => {
+      const sent = trackValidationRequests(page, dashboard);
+      await open(page, { id: 'profile--passthrough', validation: true });
+      await eventually(async () => assert.notEqual(await profileInPreview(page).textContent({ timeout: 1000 }), 'Loading...'));
       await openMokapiPanel(page);
-      const request = await openRequest(page, 200);
-      await request.getByText('Executed scripts').waitFor();
-      await request.getByText(/profile\.js/).first().waitFor();
-      const logs = await openDetails(request, 'Console logs');
-      await logs.getByText(/profile mock: success/).waitFor();
+      await assertNothingSent(sent);
+      assert.equal(await entries(page).count(), 0);
     });
 
-    await scenario('the panel shows status 500 and the validation error for Invalid', async (page) => {
-      await open(page, { id: 'profile--invalid', backend: 'mokapi' });
+    await scenario('switching the story and re-rendering it clear the list', async (page) => {
+      await open(page, { id: 'profile--valid', validation: true });
       await openMokapiPanel(page);
-      const request = await openRequest(page, 500);
-      const errors = await openDetails(request, 'Response body / validation errors');
-      await errors.getByText(/required properties are missing: email/).waitFor();
+      await entries(page, 'valid').waitFor();
+
+      // Switching validation off and on renders the story again: one entry, not two.
+      await switchValidation(page, 'off');
+      await switchValidation(page, 'on');
+      await entries(page, 'valid').waitFor();
+      assert.equal(await entries(page).count(), 1);
+
+      await page.locator('[id="profile--invalid"]').click();
+      await entries(page, 'invalid').waitFor();
+      assert.equal(await entries(page, 'valid').count(), 0);
     });
 
-    await scenario('on the Docs page, switching to Mokapi reloads both story iframes', async (page) => {
-      const before = { success: await requestCount('success'), invalid: await requestCount('invalid') };
-      await open(page, { id: 'profile--docs', docs: true });
-      await showsText(profileInDocsStory(page, 'profile--success'), 'Jane Doe');
-      await switchBackend(page, 'mokapi');
-      await showsText(profileInDocsStory(page, 'profile--invalid'), 'HTTP 500');
-      await showsText(profileInDocsStory(page, 'profile--success'), 'Jane Doe');
-      await waitForRequestAfter('success', before.success);
-      await waitForRequestAfter('invalid', before.invalid);
+    await scenario('an unknown API shows a configuration notice with Mokapi\'s message and no badge', async (page) => {
+      await open(page, { id: 'profile--unknown-api', validation: true });
+      await openMokapiPanel(page);
+      await notice(page, /api 'Unknown API' not found/).waitFor();
+      assert.equal(await entries(page).count(), 0);
+      assert.equal(await badgeOf(page), '');
+    });
+
+    await scenario('a story without context.msw renders and the panel names the missing worker', async (page) => {
+      await open(page, { id: 'profile--without-worker', validation: true });
+      await showsText(profileInPreview(page), 'Jane Doe');
+      await openMokapiPanel(page);
+      await notice(page, /MSW worker not found: `context\.msw` is missing/).waitFor();
+      assert.equal(await entries(page).count(), 0);
+    });
+
+    await scenario('a Mokapi that is not reachable shows a notice with the URL and no badge', async (page, context) => {
+      await context.route(`${dashboard}/**`, (route) => route.abort('connectionrefused'));
+      await open(page, { id: 'profile--valid', validation: true });
+      await showsText(profileInPreview(page), 'Jane Doe');
+      await openMokapiPanel(page);
+      await notice(page, new RegExp(`not reachable.*${dashboard}`)).waitFor();
+      const unreachable = entries(page, 'unreachable');
+      await unreachable.waitFor();
+      assert.match(await unreachable.textContent(), /Mokapi not reachable/);
+      assert.match(await unreachable.textContent(), /GET \/api\/profile/);
+      assert.match(await unreachable.textContent(), new RegExp(`${dashboard}.*dashboardUrl`));
+      assert.equal(await badgeOf(page), '');
+    });
+
+    await scenario('on a Docs page with inline false every story validates in its own iframe', async (page) => {
+      const sent = trackValidationRequests(page, dashboard);
+      await openStory(page, validatingStorybook.url, { id: 'docs--docs', docs: true });
+      await showsText(profileInDocsStory(page), 'Jane Doe');
+      await eventually(async () => assert.ok(sent.length > 0, 'validation request from the story iframe'));
     });
   } finally {
     if (failureDirectory) console.error(`E2E failure artifacts kept in ${failureDirectory}`);
     if (browser) await browser.close();
-    if (storybook) await storybook.stop();
+    await Promise.all(storybooks.map((storybook) => storybook.stop()));
     if (stopMokapi) await stopMokapi();
     await rm(directory, { recursive: true, force: true });
   }
