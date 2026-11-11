@@ -13,8 +13,6 @@ export function Profile({ path = '/api/profile', method = 'GET', body }: Profile
   const payload = JSON.stringify(body);
 
   useEffect(() => {
-    // TODO(bug-storybook-remount-while-pending): diagnostics, remove after the analysis.
-    console.debug(`[profile] fetch ${method} ${path}`);
     const init = method === 'POST'
       ? { method, headers: { 'Content-Type': 'application/json' }, body: payload }
       : { method };

@@ -336,6 +336,9 @@ validation off, a story without a worker runs without any message.
   to a story. Use `inline: false`, see [Docs pages](#docs-pages).
 - Only responses from MSW handlers are validated, not `passthrough()` or
   unhandled requests.
+- If you switch validation on while the story is finishing its render (for example
+  while its play function runs or Storybook waits for animations), a request can
+  show up twice in the panel. Render the story again to get a clean list.
 - The addon needs a worker (or server) with MSW's `events.on` in `context.msw`.
 - Mokapi validates the request and response pair against the contract. It does
   not run your handlers.

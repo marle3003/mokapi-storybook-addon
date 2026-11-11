@@ -4,7 +4,10 @@
 // rendering makes Storybook reload the preview. A render that was running at the switch is skipped,
 // because Storybook enqueues the re-render and starts it after that render has finished. Phase events
 // of the same story carry the same `renderId` for both, so the order of the events is what tells them apart.
-// (A switch while the story is playing, where the re-render starts at once, remounts after the first `finished` that follows.)
+// Known limitation: Storybook only enqueues the re-render while the story is pending (`loading`, `beforeEach`,
+// `rendering`, `afterEach`). A switch while the story is playing, completing or completed starts the re-render at
+// once, so the `finished` of the old render remounts while the re-render is still running, and a request can be
+// validated twice.
 export interface RemountState {
   validation?: unknown;
   /** The story waiting for the first render that starts after the switch. */

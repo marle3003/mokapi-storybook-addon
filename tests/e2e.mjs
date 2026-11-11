@@ -190,6 +190,9 @@ async function openStory(page, storybookUrl, { id, docs = false, validation = fa
   if (validation) {
     // A click while Storybook is still starting is lost: the preview's initial globals override it.
     await previewFrame(page).locator('#storybook-root > *').first().waitFor();
+    // A switch in `completing` or `completed` re-renders at once and remounts too early (see src/remount.ts).
+    await page.frame({ name: 'storybook-preview-iframe' })
+      .waitForFunction(() => window.__STORYBOOK_PREVIEW__?.currentRender?.phase === 'finished');
     await switchValidation(page, 'on');
   }
 }
