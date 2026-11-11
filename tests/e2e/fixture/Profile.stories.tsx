@@ -42,12 +42,13 @@ export const SlowAfterEach = {
 };
 
 // A finite CSS animation keeps the render in `completing` (waitForAnimations), where Storybook does not
-// enqueue a re-render but starts it at once.
+// enqueue a re-render but starts it at once. It runs longer than waitForAnimations' 5 s timeout, so each
+// render leaves `completing` on its own timeout: the old render before the re-render.
 export const Animated = {
   render: () => (
     <>
       <style>{'@keyframes fade { from { opacity: 0.5; } to { opacity: 1; } }'}</style>
-      <div style={{ animation: 'fade 4s' }}>
+      <div style={{ animation: 'fade 8s' }}>
         <Profile />
       </div>
     </>

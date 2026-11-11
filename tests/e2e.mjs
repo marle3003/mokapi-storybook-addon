@@ -425,14 +425,45 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await open(page, { id: 'profile--animated' });
       const preview = page.frame({ name: 'storybook-preview-iframe' });
       await preview.evaluate(() => { window.__marker = 'same document'; });
+      // Local channel listeners run synchronously in emission order. Storybook emits `globalsUpdated`
+      // right before it calls `rerender()`, so the entry after 'globalsUpdated' is the re-render's first phase.
+      await preview.waitForFunction(() => window.__STORYBOOK_PREVIEW__?.currentRender);
+      await preview.evaluate(() => {
+        // Starts with the current phase, because the render may already be in `completing`.
+        window.__events = [window.__STORYBOOK_PREVIEW__.currentRender.phase];
+        const channel = window.__STORYBOOK_ADDONS_CHANNEL__;
+        channel.on('storyRenderPhaseChanged', ({ newPhase }) => window.__events.push(newPhase));
+        channel.on('globalsUpdated', () => window.__events.push('globalsUpdated'));
+      });
       // The animation keeps the render in `completing`: not pending, so Storybook re-renders at once.
-      await preview.waitForFunction(() => window.__STORYBOOK_PREVIEW__?.currentRender?.phase === 'completing');
+      await preview.waitForFunction(() => window.__events.at(-1) === 'completing');
+      // Storybook emits its own `globalsUpdated` while the story starts, so look only after this point.
+      const beforeSwitch = await preview.evaluate(() => window.__events.length);
+      // The old render times out in `completing` 5 s after it started. Switch late enough that the re-render
+      // finishes clearly after it, but before the old render leaves `completing`.
+      await setTimeout(1500);
       await switchValidation(page, 'on');
+      // The remount is the second `loading` after the switch (the first is the re-render).
+      await preview.waitForFunction((from) => {
+        const rest = window.__events.slice(from);
+        return rest.indexOf('loading', rest.indexOf('loading') + 1) > 0;
+      }, beforeSwitch);
       await openMokapiPanel(page);
       await entries(page, 'valid').first().waitFor();
       await setTimeout(1500);
       assert.equal(await entries(page).count(), 1);
       assert.equal(await preview.evaluate(() => window.__marker), 'same document');
+      // Without this check the switch may land in `afterEach` or `finished` and exercise another path.
+      const events = await preview.evaluate(() => window.__events);
+      const switched = events.indexOf('globalsUpdated', beforeSwitch);
+      assert.deepEqual(events.slice(switched - 1, switched + 2), ['completing', 'globalsUpdated', 'loading'],
+        `the switch must land in the running render's 'completing' phase and start the re-render at once, got: ${events.join(', ')}`);
+      // A remount before the re-render has finished cancels it: the re-render then reports `aborted`
+      // and still emits its `finished`, so only the missing `aborted` shows that the remount waited.
+      const afterSwitch = events.slice(switched);
+      const remount = afterSwitch.indexOf('loading', afterSwitch.indexOf('loading') + 1);
+      assert.ok(!afterSwitch.slice(0, remount).includes('aborted'),
+        `the remount must not cancel the re-render, got: ${events.join(', ')}`);
     });
 
     await scenario('a story with disable true sends nothing', async (page) => {
