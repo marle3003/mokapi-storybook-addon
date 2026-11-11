@@ -183,8 +183,7 @@ async function switchValidation(page, state) {
 }
 
 // Switches and waits for both renders that follow: Storybook's re-render and the addon's remount.
-// Expects a finished story. A switch in `completing` or `completed` re-renders at once and the
-// remount comes too early, so a request is validated twice (known limitation, see src/remount.ts).
+// Expects a finished story, because it counts the `storyFinished` events that follow the switch.
 async function switchValidationAndWait(page, state) {
   const preview = page.frame({ name: 'storybook-preview-iframe' });
   const finished = await preview.evaluate(() => {
@@ -414,6 +413,20 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const preview = page.frame({ name: 'storybook-preview-iframe' });
       await preview.evaluate(() => { window.__marker = 'same document'; });
       // The render is held in afterEach for seconds, so the switch arrives while it is pending.
+      await switchValidation(page, 'on');
+      await openMokapiPanel(page);
+      await entries(page, 'valid').first().waitFor();
+      await setTimeout(1500);
+      assert.equal(await entries(page).count(), 1);
+      assert.equal(await preview.evaluate(() => window.__marker), 'same document');
+    });
+
+    await scenario('switching validation on while the story finishes its render validates once without reloading the preview', async (page) => {
+      await open(page, { id: 'profile--animated' });
+      const preview = page.frame({ name: 'storybook-preview-iframe' });
+      await preview.evaluate(() => { window.__marker = 'same document'; });
+      // The animation keeps the render in `completing`: not pending, so Storybook re-renders at once.
+      await preview.waitForFunction(() => window.__STORYBOOK_PREVIEW__?.currentRender?.phase === 'completing');
       await switchValidation(page, 'on');
       await openMokapiPanel(page);
       await entries(page, 'valid').first().waitFor();

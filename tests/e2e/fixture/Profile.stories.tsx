@@ -41,6 +41,20 @@ export const SlowAfterEach = {
   parameters: { msw: { handlers: [profileHandler(jane)] } },
 };
 
+// A finite CSS animation keeps the render in `completing` (waitForAnimations), where Storybook does not
+// enqueue a re-render but starts it at once.
+export const Animated = {
+  render: () => (
+    <>
+      <style>{'@keyframes fade { from { opacity: 0.5; } to { opacity: 1; } }'}</style>
+      <div style={{ animation: 'fade 4s' }}>
+        <Profile />
+      </div>
+    </>
+  ),
+  parameters: { msw: { handlers: [profileHandler(jane)] } },
+};
+
 export const Passthrough = {
   parameters: { msw: { handlers: [http.get('/api/profile', () => passthrough())] } },
 };

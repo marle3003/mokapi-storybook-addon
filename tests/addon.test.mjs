@@ -529,6 +529,50 @@ test('a render that was already running at the switch does not trigger the remou
   assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished(), started(), finished(), finished()), ['a--one']);
 });
 
+// Storybook starts the re-render at once while the story is playing, completing or completed. The initial
+// render is still running then, so the events are started(initial), switched, started(new), finished(old), finished(new).
+test('a switch while the story finishes its render remounts after the re-render has finished', () => {
+  const beforeSecondFinished = [initialValidation('off'), started(), switched('on'), started(), finished()];
+  assert.deepEqual(remountSteps(...beforeSecondFinished), []);
+  assert.deepEqual(remountSteps(...beforeSecondFinished, finished()), ['a--one']);
+  assert.deepEqual(remountSteps(...beforeSecondFinished, finished(), finished()), ['a--one']);
+});
+
+// The re-render starts at once over a render that has settled. Its `finished` is the only one after the switch.
+test('a switch after the story has finished its render remounts after the re-render has finished', () => {
+  const beforeFinished = [initialValidation('off'), started(), finished(), switched('on'), started()];
+  assert.deepEqual(remountSteps(...beforeFinished), []);
+  assert.deepEqual(remountSteps(...beforeFinished, finished()), ['a--one']);
+});
+
+test('a switch while the story is pending remounts after the enqueued re-render has finished', () => {
+  const beforeEnqueuedStart = [initialValidation('off'), started(), switched('on'), finished()];
+  assert.deepEqual(remountSteps(...beforeEnqueuedStart), []);
+  assert.deepEqual(remountSteps(...beforeEnqueuedStart, started()), []);
+  assert.deepEqual(remountSteps(...beforeEnqueuedStart, started(), finished()), ['a--one']);
+});
+
+// Enqueued: switched(on), started(new), switched(off), finished(new), started(new), finished.
+// Immediate: switched(on), started(new), switched(off), started(new), finished(old), finished(new).
+test('a second switch while the re-render runs remounts once after the latest re-render has finished', () => {
+  const enqueued = [initialValidation('off'), started(), switched('on'), finished(), started(), switched('off')];
+  assert.deepEqual(remountSteps(...enqueued, finished()), []);
+  assert.deepEqual(remountSteps(...enqueued, finished(), started(), finished()), ['a--one']);
+  const immediate = [initialValidation('off'), started(), switched('on'), started(), switched('off'), started()];
+  assert.deepEqual(remountSteps(...immediate, finished()), []);
+  assert.deepEqual(remountSteps(...immediate, finished(), finished()), ['a--one']);
+});
+
+test('a story change clears the running render, so a later switch does not skip a finished', () => {
+  const afterStoryChange = [initialValidation('off'), started(), { type: 'story-changed' }, switched('on'), started()];
+  assert.deepEqual(remountSteps(...afterStoryChange, finished()), ['a--one']);
+});
+
+test('a render of another story that is running does not make the switch wait for another finished', () => {
+  const beforeFinished = [initialValidation('off'), started('a--two'), switched('on'), started()];
+  assert.deepEqual(remountSteps(...beforeFinished, finished()), ['a--one']);
+});
+
 test('nothing is remounted without a switch of the value', () => {
   assert.deepEqual(remountSteps(initialValidation('off'), finished()), []);
   assert.deepEqual(remountSteps(initialValidation('off'), switched('off'), finished()), []);
