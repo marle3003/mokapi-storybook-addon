@@ -66,7 +66,7 @@ async function eventually(assertion, timeout = 15000) {
   }
 }
 
-// MOKAPI_BIN points to a local Mokapi build (the endpoint ships with 0.58.0); otherwise the go-mokapi package is used.
+// MOKAPI_BIN overrides the go-mokapi binary, e.g. for a local Mokapi build.
 function mokapiBinary() {
   if (process.env.MOKAPI_BIN) return process.env.MOKAPI_BIN;
   const mokapiRequire = createRequire(require.resolve('go-mokapi/package.json'));

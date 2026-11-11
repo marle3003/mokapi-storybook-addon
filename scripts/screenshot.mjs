@@ -1,6 +1,6 @@
 // Takes docs/screenshot.png for the README: the Invalid story of the e2e fixture with validation
-// on and the Mokapi panel showing the validation error. Needs a fresh `npm run build` and a Mokapi
-// with the validate endpoint (MOKAPI_BIN, otherwise the go-mokapi package).
+// on and the Mokapi panel showing the validation error. Needs a fresh `npm run build`.
+// MOKAPI_BIN overrides the go-mokapi binary, e.g. for a local Mokapi build.
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
