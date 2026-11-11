@@ -182,6 +182,22 @@ async function switchValidation(page, state) {
   await toggleButton(page, state).waitFor();
 }
 
+// Switches and waits for both renders that follow: Storybook's re-render and the addon's remount.
+// Expects a finished story. A switch in `completing` or `completed` re-renders at once and the
+// remount comes too early, so a request is validated twice (known limitation, see src/remount.ts).
+async function switchValidationAndWait(page, state) {
+  const preview = page.frame({ name: 'storybook-preview-iframe' });
+  const finished = await preview.evaluate(() => {
+    if (window.__finishedRenders === undefined) {
+      window.__finishedRenders = 0;
+      window.__STORYBOOK_ADDONS_CHANNEL__.on('storyFinished', () => { window.__finishedRenders += 1; });
+    }
+    return window.__finishedRenders;
+  });
+  await switchValidation(page, state);
+  await preview.waitForFunction((count) => window.__finishedRenders >= count, finished + 2);
+}
+
 // Opens a story or docs page like a Storybook user and optionally switches validation on.
 async function openStory(page, storybookUrl, { id, docs = false, validation = false }) {
   await page.goto(`${storybookUrl}/?path=/${docs ? 'docs' : 'story'}/${id}`);
@@ -190,10 +206,9 @@ async function openStory(page, storybookUrl, { id, docs = false, validation = fa
   if (validation) {
     // A click while Storybook is still starting is lost: the preview's initial globals override it.
     await previewFrame(page).locator('#storybook-root > *').first().waitFor();
-    // A switch in `completing` or `completed` re-renders at once and remounts too early (see src/remount.ts).
     await page.frame({ name: 'storybook-preview-iframe' })
       .waitForFunction(() => window.__STORYBOOK_PREVIEW__?.currentRender?.phase === 'finished');
-    await switchValidation(page, 'on');
+    await switchValidationAndWait(page, 'on');
   }
 }
 
@@ -431,7 +446,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await entries(page, 'valid').waitFor();
 
       // Switching validation off and on renders the story again: one entry, not two.
-      await switchValidation(page, 'off');
+      await switchValidationAndWait(page, 'off');
       await switchValidation(page, 'on');
       await entries(page, 'valid').waitFor();
       assert.equal(await entries(page).count(), 1);
