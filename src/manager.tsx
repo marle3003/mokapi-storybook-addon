@@ -7,6 +7,7 @@ import { Badge, Link, ScrollArea, ToggleButton } from 'storybook/internal/compon
 import { VerifiedIcon } from '@storybook/icons';
 import { styled } from 'storybook/theming';
 import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
+import { testModeText } from './report.js';
 import {
   PANEL_EVENT,
   initialPanelState,
@@ -94,11 +95,24 @@ function PanelTitle() {
 }
 
 function EntryItem({ entry }: { entry: Entry }) {
+  const request = `${entry.method} ${entry.url}`;
   return (
     <EntryRow data-testid="mokapi-entry" data-status={entry.status}>
       <EntryStatus status={entry.status}>{STATUS_LABELS[entry.status]}</EntryStatus>
       {' '}
-      <EntryUrl>{`${entry.method} ${entry.url}`}</EntryUrl>
+      <EntryUrl>
+        {entry.operation && entry.operationUrl ? (
+          <Link
+            href={entry.operationUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={`${entry.operation.method} ${entry.operation.path}`}
+            data-testid="mokapi-operation"
+          >
+            {request}
+          </Link>
+        ) : request}
+      </EntryUrl>
       {` | ${entry.statusCode} | ${new Date(entry.time).toLocaleTimeString()}`}
       {entry.message && <div>{entry.message}</div>}
       {entry.errors.length > 0 && (
@@ -136,7 +150,7 @@ function PanelFrame({ children }: { children: ReactNode }) {
 function Panel() {
   const [globals] = useGlobals();
   const { selectedPanel, layout } = useStorybookState();
-  const { entries, notices } = useResultsOfSelectedStory();
+  const { entries, notices, testMode } = useResultsOfSelectedStory();
   const dashboardUrl = window.__MOKAPI_PANEL_OPTIONS__?.dashboardUrl;
   if (selectedPanel !== PANEL_ID || !layout.showPanel) return null;
   if (globals.mokapiValidation !== 'on') {
@@ -144,6 +158,7 @@ function Panel() {
   }
   return (
     <PanelFrame>
+      {testMode && <p data-testid="mokapi-test-mode">{testModeText(testMode)}</p>}
       {notices.map((notice) => (
         <NoticeMessage key={`${notice.kind}-${notice.message}`} kind={notice.kind} role="alert">{notice.message}</NoticeMessage>
       ))}

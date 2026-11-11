@@ -13,9 +13,17 @@ export interface ValidationError {
   message: string;
 }
 
+/** The contract operation Mokapi matched; `path` is the template of the contract, e.g. `/profile/{id}`. */
+export interface Operation {
+  api: string;
+  method: string;
+  path: string;
+}
+
 // Results carry Mokapi's errors, the other outcomes a notice message for the panel.
 export type ValidationOutcome =
-  | { status: 'valid' | 'invalid' | 'not-in-contract'; errors: ValidationError[] }
+  | { status: 'valid' | 'invalid'; errors: ValidationError[]; operation?: Operation }
+  | { status: 'not-in-contract'; errors: ValidationError[] }
   | { status: 'unreachable' | 'endpoint-missing' | 'config-error'; message: string };
 
 // A body that was already consumed or cannot be read must not stop the validation.
@@ -69,9 +77,9 @@ const messageOf = (body: unknown): string | undefined =>
   typeof (body as { message?: unknown })?.message === 'string' ? (body as { message: string }).message : undefined;
 
 // Mokapi reports an operation it cannot find (or cannot choose) as the error with location "operation".
-function classifyResult(errors: ValidationError[]): ValidationOutcome {
-  if (errors.length === 0) return { status: 'valid', errors };
-  return { status: errors[0].location === 'operation' ? 'not-in-contract' : 'invalid', errors };
+function classifyResult(errors: ValidationError[], operation?: Operation): ValidationOutcome {
+  if (errors.length > 0 && errors[0].location === 'operation') return { status: 'not-in-contract', errors };
+  return { status: errors.length === 0 ? 'valid' : 'invalid', errors, ...(operation && { operation }) };
 }
 
 export async function classify(dashboardUrl: string, answer: Response | unknown): Promise<ValidationOutcome> {
@@ -88,7 +96,7 @@ export async function classify(dashboardUrl: string, answer: Response | unknown)
   };
   if (answer.ok) {
     return Array.isArray((body as { errors?: unknown })?.errors)
-      ? classifyResult((body as { errors: ValidationError[] }).errors)
+      ? classifyResult((body as { errors: ValidationError[] }).errors, (body as { operation?: Operation }).operation)
       : endpointMissing;
   }
   const message = messageOf(body);

@@ -1,6 +1,11 @@
+/** What a story with a failing validation result does: fail (`error`), report a warning (`todo`) or nothing (`off`). */
+export type TestMode = 'error' | 'todo' | 'off';
+
 export interface MokapiAddonOptions {
   dashboardUrl?: string;
   defaultValidation?: boolean;
+  /** Test mode of all stories, `parameters.mokapi.test` overrides it. Default `todo`. */
+  defaultTest?: TestMode;
 }
 
 export type ResolvedAddonOptions = Required<MokapiAddonOptions>;
@@ -13,4 +18,6 @@ export interface MokapiStoryParameters {
   api?: string;
   /** Sends nothing to Mokapi for this story. */
   disable?: boolean;
+  /** Overrides `defaultTest` for this story. */
+  test?: TestMode;
 }

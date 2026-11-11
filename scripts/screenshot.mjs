@@ -80,7 +80,7 @@ providers:
     '--config-dir', join(fixtureDirectory, '.storybook'),
   ], {
     cwd: fixtureDirectory,
-    env: { ...process.env, MOKAPI_DASHBOARD: dashboard, MOKAPI_DEFAULT_VALIDATION: 'true', STORYBOOK_DISABLE_TELEMETRY: '1' },
+    env: { ...process.env, MOKAPI_DASHBOARD: dashboard, MOKAPI_DEFAULT_VALIDATION: 'true', MOKAPI_SCREENSHOT: 'true', STORYBOOK_DISABLE_TELEMETRY: '1' },
     detached: true,
     stdio: 'ignore',
   });

@@ -6,19 +6,27 @@ import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '..
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { toggleState } from '../dist/toggle.js';
-import { validationHook } from '../dist/listener.js';
+import { testHook, validationHook } from '../dist/listener.js';
+import { errorMessage, operationUrl, reportStatus, resolveTestMode, testModeText } from '../dist/report.js';
 import { classify, sendValidation, serializePair } from '../dist/validation.js';
 
 test('options default to the local Mokapi dashboard and validation off', () => {
-  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false });
+  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'todo' });
   assert.deepEqual(resolveOptions({}), resolveOptions());
 });
 
 test('options keep the given values and strip trailing slashes from the dashboard URL', () => {
   assert.deepEqual(
     resolveOptions({ dashboardUrl: 'https://mokapi.example.com/', defaultValidation: true }),
-    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true },
+    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true, defaultTest: 'todo' },
   );
+});
+
+test('options accept the test modes error, todo and off and reject anything else', () => {
+  for (const defaultTest of ['error', 'todo', 'off']) assert.equal(resolveOptions({ defaultTest }).defaultTest, defaultTest);
+  for (const defaultTest of ['strict', '', true, null]) {
+    assert.throws(() => resolveOptions({ defaultTest }), /^Error: Mokapi: defaultTest must be 'error', 'todo' or 'off'\.$/);
+  }
 });
 
 test('options ignore settings that were removed from the addon', () => {
@@ -91,8 +99,28 @@ test('serialization sends an empty body when a body cannot be read', async () =>
 const classifyAnswer = (body, status = 200) => classify(dashboardUrl, Response.json(body, { status }));
 
 test('classification tells valid from invalid responses', async () => {
-  assert.deepEqual(await classifyAnswer(answers.valid), { status: 'valid', errors: [] });
-  assert.deepEqual(await classifyAnswer(answers.invalid), { status: 'invalid', errors: answers.invalid.errors });
+  assert.deepEqual(await classifyAnswer(answers.valid), { status: 'valid', errors: [], operation: answers.valid.operation });
+  assert.deepEqual(await classifyAnswer(answers.invalid), {
+    status: 'invalid', errors: answers.invalid.errors, operation: answers.invalid.operation,
+  });
+});
+
+test('classification keeps the matched operation of valid and invalid answers only', async () => {
+  assert.deepEqual((await classifyAnswer(answers.valid)).operation, { api: 'Profile API', method: 'GET', path: '/profile' });
+  assert.deepEqual((await classifyAnswer(answers.invalid)).operation, { api: 'Profile API', method: 'GET', path: '/profile' });
+  assert.equal('operation' in await classifyAnswer(answers.noOperation), false);
+  assert.equal('operation' in await classifyAnswer(answers.ambiguous), false);
+});
+
+test('operation URL points to the dashboard page of the operation with encoded API name and path segments', () => {
+  assert.equal(
+    operationUrl('http://localhost:8080', { api: 'Profile API', method: 'GET', path: '/profile/{id}' }),
+    'http://localhost:8080/dashboard/http/services/Profile%20API/profile/%7Bid%7D/get',
+  );
+  assert.equal(
+    operationUrl('https://mokapi.example.com', { api: 'Shop/EU', method: 'POST', path: '/orders/{orderId}/items' }),
+    'https://mokapi.example.com/dashboard/http/services/Shop%2FEU/orders/%7BorderId%7D/items/post',
+  );
 });
 
 test('classification keeps Mokapi\'s message when no operation or several APIs match', async () => {
@@ -160,6 +188,9 @@ function fakeWorker() {
     events: { on: (event, listener) => listeners.push({ event, listener }) },
     started: (request, requestId = 'id') => play('request:start', { request, requestId }),
     mocked: (request, response, requestId = 'id') => play('response:mocked', { request, response, requestId }),
+    bypassed: (request, requestId = 'id') => play('response:bypass', { request, response: new Response(), requestId }),
+    unhandled: (request, requestId = 'id') => play('request:unhandled', { request, requestId }),
+    threw: (request, requestId = 'id') => play('unhandledException', { error: new Error('handler failed'), request, requestId }),
   };
 }
 
@@ -187,16 +218,18 @@ function recorder() {
   };
 }
 
-const hookOptions = (panel) => ({ emit: panel.emit, dashboardUrl });
+const hookOptions = (panel, defaultTest = 'todo') => ({ emit: panel.emit, dashboardUrl, defaultTest });
 
 test('hook registers its listeners once per worker across repeated runs', () => {
   const worker = fakeWorker();
   const panel = recorder();
   for (let i = 0; i < 3; i++) validationHook(storyContext(worker), hookOptions(panel));
-  assert.deepEqual(worker.registrations.map(({ event }) => event), ['request:start', 'response:mocked']);
+  assert.deepEqual(worker.registrations.map(({ event }) => event), [
+    'request:start', 'response:mocked', 'response:bypass', 'request:unhandled', 'unhandledException',
+  ]);
   const otherWorker = fakeWorker();
   validationHook(storyContext(otherWorker), hookOptions(panel));
-  assert.equal(otherWorker.registrations.length, 2);
+  assert.equal(otherWorker.registrations.length, 5);
 });
 
 test('hook announces every render with the story and a new render id', () => {
@@ -208,6 +241,29 @@ test('hook announces every render with the story and a new render id', () => {
   assert.deepEqual([first.type, first.storyId], ['render-started', 'a--one']);
   assert.deepEqual([second.type, second.storyId], ['render-started', 'a--two']);
   assert.ok(second.renderId > first.renderId);
+});
+
+test('hook announces the resolved test mode while validating, also without a worker or with an invalid parameter', () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker, { id: 'a--default' }), hookOptions(panel, 'todo'));
+  validationHook(storyContext(worker, { id: 'a--error', mokapi: { test: 'error' } }), hookOptions(panel, 'todo'));
+  validationHook(storyContext(worker, { id: 'a--off', mokapi: { test: 'off' } }), hookOptions(panel, 'error'));
+  validationHook(storyContext(worker, { id: 'a--invalid', mokapi: { test: 'strict' } }), hookOptions(panel, 'error'));
+  validationHook(storyContext(undefined, { id: 'a--no-worker', mokapi: { test: 'error' } }), hookOptions(panel, 'todo'));
+  const started = panel.actions.filter(({ type }) => type === 'render-started');
+  assert.deepEqual(started.map(({ storyId, testMode }) => [storyId, testMode]), [
+    ['a--default', 'todo'], ['a--error', 'error'], ['a--off', 'off'], ['a--invalid', 'error'], ['a--no-worker', 'error'],
+  ]);
+});
+
+test('hook announces no test mode with validation off or for a disabled story', () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker, { validation: 'off', mokapi: { test: 'error' } }), hookOptions(panel));
+  validationHook(storyContext(worker, { mokapi: { disable: true, test: 'error' } }), hookOptions(panel));
+  assert.equal(panel.actions.length, 2);
+  for (const action of panel.actions) assert.equal('testMode' in action, false);
 });
 
 test('listener sends the mocked pair with the API of the story and reports the result', async (t) => {
@@ -235,10 +291,124 @@ test('listener sends the mocked pair with the API of the story and reports the r
       statusCode: 200,
       status: 'invalid',
       errors: answers.invalid.errors,
+      operation: answers.invalid.operation,
+      operationUrl: 'http://localhost:8080/dashboard/http/services/Profile%20API/profile/get',
     },
   );
   assert.equal(typeof action.entry.sequence, 'number');
   assert.equal(typeof action.entry.time, 'number');
+});
+
+test('listener leaves the operation out of entries that Mokapi did not match', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.noOperation));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), hookOptions(panel));
+  const result = panel.next();
+  worker.mocked(getProfile(), jsonResponse());
+  const { entry } = await result;
+  assert.equal(entry.status, 'not-in-contract');
+  assert.equal('operation' in entry || 'operationUrl' in entry, false);
+  fetch.mock.mockImplementation(async () => { throw new TypeError('Failed to fetch'); });
+  const unreachable = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'other');
+  assert.equal('operationUrl' in (await unreachable).entry, false);
+});
+
+const invalidEntry = (overrides = {}) => ({
+  sequence: 1,
+  time: 0,
+  method: 'GET',
+  url: '/api/profile/1',
+  statusCode: 200,
+  status: 'invalid',
+  errors: [{ location: 'response.body', message: "missing required property 'name'" }],
+  operation: { api: 'Profile API', method: 'GET', path: '/profile/{id}' },
+  operationUrl: 'http://localhost:8080/dashboard/http/services/Profile%20API/profile/%7Bid%7D/get',
+  ...overrides,
+});
+const validEntry = () => invalidEntry({ status: 'valid', errors: [] });
+const notInContractEntry = () => ({ ...invalidEntry({ status: 'not-in-contract' }), operation: undefined, operationUrl: undefined });
+const panelNotice = (kind, message = `${kind} message`) => ({ kind, message });
+const stateOf = (entries = [], notices = []) => ({ ...initialPanelState, entries, notices });
+
+test('the test mode of a story is its parameter, an invalid parameter falls back to the default and is flagged', () => {
+  assert.deepEqual(resolveTestMode(undefined, 'todo'), { mode: 'todo', invalid: false });
+  assert.deepEqual(resolveTestMode('error', 'todo'), { mode: 'error', invalid: false });
+  assert.deepEqual(resolveTestMode('off', 'error'), { mode: 'off', invalid: false });
+  assert.deepEqual(resolveTestMode('strict', 'error'), { mode: 'error', invalid: true });
+  assert.deepEqual(resolveTestMode(true, 'off'), { mode: 'off', invalid: true });
+});
+
+test('the panel explains what each test mode does', () => {
+  assert.equal(testModeText('error'), 'Test mode: error. Contract errors make this story fail.');
+  assert.equal(testModeText('todo'), 'Test mode: todo. Contract errors are reported as warnings, the story stays green.');
+  assert.equal(testModeText('off'), 'Test mode: off. Contract errors are shown here only.');
+});
+
+test('report status is failed in error mode and warning in todo mode for every failing result', () => {
+  const failing = [
+    stateOf([invalidEntry()]),
+    stateOf([], [panelNotice('unreachable')]),
+    stateOf([], [panelNotice('endpoint-missing')]),
+    stateOf([], [panelNotice('config-error')]),
+    stateOf([], [panelNotice('timeout')]),
+  ];
+  for (const state of failing) {
+    assert.equal(reportStatus(state, 'error'), 'failed');
+    assert.equal(reportStatus(state, 'todo'), 'warning');
+  }
+});
+
+test('report status ignores results that are not in the contract, a missing worker and stories without requests', () => {
+  for (const state of [
+    initialPanelState,
+    stateOf([validEntry(), notInContractEntry()]),
+    stateOf([], [panelNotice('worker-missing')]),
+  ]) {
+    assert.equal(reportStatus(state, 'error'), 'passed');
+    assert.equal(reportStatus(state, 'todo'), 'passed');
+  }
+});
+
+test('error message names the count, the request, the operation with its dashboard page and the errors', () => {
+  assert.equal(errorMessage(stateOf([invalidEntry()])), [
+    'Mokapi: 1 response does not match the contract.',
+    '',
+    'GET /api/profile/1 -> GET /profile/{id} (http://localhost:8080/dashboard/http/services/Profile%20API/profile/%7Bid%7D/get)',
+    "  response.body: missing required property 'name'",
+  ].join('\n'));
+});
+
+test('error message counts only invalid entries and uses the plural', () => {
+  const second = invalidEntry({ sequence: 2, url: '/api/profile/2', errors: [
+    { location: 'response.status', message: 'status 500 not defined' },
+    { location: 'response.body', message: 'not valid' },
+  ] });
+  const requestLine = (id) => `GET /api/profile/${id} -> GET /profile/{id} (http://localhost:8080/dashboard/http/services/Profile%20API/profile/%7Bid%7D/get)`;
+  assert.equal(errorMessage(stateOf([validEntry(), invalidEntry(), notInContractEntry(), second])), [
+    'Mokapi: 2 responses do not match the contract.',
+    '',
+    requestLine(1),
+    "  response.body: missing required property 'name'",
+    requestLine(2),
+    '  response.status: status 500 not defined',
+    '  response.body: not valid',
+  ].join('\n'));
+});
+
+test('error message lists the failing notices with their panel text and starts with the first one when nothing is invalid', () => {
+  const notices = [panelNotice('worker-missing'), panelNotice('unreachable', 'not reachable'), panelNotice('timeout', 'timeout (GET /a).'), panelNotice('timeout', 'timeout (GET /b).')];
+  assert.equal(errorMessage(stateOf([validEntry()], notices)), 'not reachable\ntimeout (GET /a).\ntimeout (GET /b).');
+  assert.equal(
+    errorMessage(stateOf([invalidEntry()], [panelNotice('config-error', 'api not found')])).split('\n').at(-1),
+    'api not found',
+  );
+});
+
+test('a response without a matched operation is listed by its request only', () => {
+  const entry = invalidEntry({ operation: undefined, operationUrl: undefined });
+  assert.equal(errorMessage(stateOf([entry])).split('\n')[2], 'GET /api/profile/1');
 });
 
 test('a response is attributed to the render that started the request, not to a later one', async (t) => {
@@ -336,6 +506,316 @@ test('a Mokapi that cannot be reached is reported as entry and as notice of the 
   assert.equal(noticeAction.notice.message, entryAction.entry.message);
 });
 
+// The context Storybook passes to beforeEach and afterEach: the same object, with the abort signal and the reporting API.
+function testContext(worker, options) {
+  const reports = [];
+  const controller = new AbortController();
+  return {
+    ...storyContext(worker, options),
+    abortSignal: controller.signal,
+    reporting: { addReport: (report) => reports.push(report) },
+    reports,
+    abort: () => controller.abort(),
+  };
+}
+
+const settled = () => new Promise((resolve) => setImmediate(resolve));
+const failingMode = { mokapi: { test: 'error' } };
+
+test('afterEach waits for a delayed response and its validation before it reports', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile());
+  let done = false;
+  const finished = testHook(context, hookOptions(panel)).then(() => { done = true; });
+  await settled();
+  assert.equal(done, false);
+  worker.mocked(getProfile(), jsonResponse());
+  await finished;
+  assert.deepEqual(context.reports.map(({ type, version, status }) => [type, version, status]), [['mokapi', 1, 'warning']]);
+  assert.deepEqual(context.reports[0].result.entries.map(({ status }) => status), ['invalid']);
+});
+
+test('afterEach in error mode adds a failed report and throws the message of the invalid responses', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, { mokapi: { test: 'error' } });
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(panel));
+  worker.mocked(getProfile(), jsonResponse());
+  await assert.rejects(finished, {
+    message: [
+      'Mokapi: 1 response does not match the contract.',
+      '',
+      'GET /api/profile?id=1 -> GET /profile (http://localhost:8080/dashboard/http/services/Profile%20API/profile/get)',
+      '  response.body: required properties are missing: email',
+    ].join('\n'),
+  });
+  assert.equal(context.reports[0].status, 'failed');
+});
+
+test('afterEach does not wait for requests that MSW bypasses', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  for (const drop of ['bypassed', 'unhandled']) {
+    const panel = recorder();
+    const worker = fakeWorker();
+    const context = testContext(worker, failingMode);
+    validationHook(context, hookOptions(panel));
+    worker.started(getProfile(), 'dropped');
+    const finished = testHook(context, hookOptions(panel));
+    worker[drop](getProfile(), 'dropped');
+    await finished;
+    assert.equal(context.reports[0].status, 'passed', drop);
+    // The request no longer belongs to the render that started it.
+    validationHook(testContext(worker), hookOptions(panel));
+    const secondRender = panel.actions.at(-1).renderId;
+    const result = panel.next();
+    worker.mocked(getProfile(), jsonResponse(), 'dropped');
+    assert.equal((await result).renderId, secondRender, drop);
+  }
+  assert.equal(fetch.mock.callCount(), 2);
+});
+
+test('afterEach does not wait for a request whose handler throws', async () => {
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  worker.started(getProfile(), 'thrown');
+  const finished = testHook(context, hookOptions(recorder()));
+  worker.threw(getProfile(), 'thrown');
+  await finished;
+  assert.equal(context.reports[0].status, 'passed');
+});
+
+test('the 500 that MSW answers for a throwing handler is not validated', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile(), 'thrown');
+  const finished = testHook(context, hookOptions(panel));
+  worker.threw(getProfile(), 'thrown');
+  worker.mocked(getProfile(), Response.json({ message: 'handler failed' }, { status: 500 }), 'thrown');
+  await finished;
+  await settled();
+  assert.equal(fetch.mock.callCount(), 0);
+  assert.equal(context.reports[0].status, 'passed');
+  assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started']);
+});
+
+test('a validation that does not finish within 4 s fails with one notice per request', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile(), 'one');
+  worker.started(new Request('http://localhost:6006/api/orders'), 'two');
+  const finished = testHook(context, hookOptions(panel));
+  t.mock.timers.tick(3999);
+  assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started']);
+  t.mock.timers.tick(1);
+  await assert.rejects(finished, {
+    message: [
+      'Mokapi validation did not finish within 4 s (GET /api/profile?id=1).',
+      'Mokapi validation did not finish within 4 s (GET /api/orders).',
+    ].join('\n'),
+  });
+  assert.deepEqual(panel.actions.slice(1).map(({ notice }) => notice.kind), ['timeout', 'timeout']);
+  assert.equal(context.reports[0].status, 'failed');
+  assert.equal(context.reports[0].result.notices.length, 2);
+});
+
+const tick = async (t, milliseconds) => { t.mock.timers.tick(milliseconds); await settled(); };
+const requestTo = (path) => new Request(`http://localhost:6006${path}`);
+
+test('afterEach counts a request that starts within the quiet window of 100 ms', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker);
+  validationHook(context, hookOptions(panel));
+  let done = false;
+  const finished = testHook(context, hookOptions(panel)).then(() => { done = true; });
+  await tick(t, 50);
+  worker.started(getProfile(), 'early');
+  await tick(t, 99);
+  assert.equal(done, false);
+  await tick(t, 1);
+  assert.equal(done, false, 'the request that started 50 ms after afterEach is waited for');
+  worker.mocked(getProfile(), jsonResponse(), 'early');
+  await finished;
+  assert.deepEqual(context.reports[0].result.entries.map(({ status }) => status), ['invalid']);
+});
+
+test('afterEach ignores a request that starts after the quiet window', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  const finished = testHook(context, hookOptions(recorder()));
+  t.mock.timers.tick(100);
+  await finished;
+  worker.started(getProfile(), 'late');
+  assert.equal(context.reports[0].status, 'passed');
+});
+
+test('the quiet window ends after 1 s even if requests keep starting, and the 4 s limit counts from the start', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  const finished = testHook(context, hookOptions(recorder()));
+  for (let i = 0; i < 11; i++) {
+    await tick(t, 90);
+    worker.started(requestTo(`/api/stream${i}`), `stream${i}`);
+  }
+  await tick(t, 10);
+  worker.started(requestTo('/api/after'), 'after');
+  await tick(t, 2999);
+  t.mock.timers.tick(1);
+  const lines = await finished.then(() => [], (error) => error.message.split('\n'));
+  assert.equal(lines.length, 11);
+  assert.ok(lines.every((line) => /did not finish within 4 s \(GET \/api\/stream\d+\)\.$/.test(line)), lines.join('\n'));
+});
+
+test('a request that starts in the quiet window times out 4 s after afterEach began', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  let settledAt;
+  const finished = testHook(context, hookOptions(recorder())).catch(() => { settledAt = 'rejected'; });
+  await tick(t, 50);
+  worker.started(getProfile(), 'early');
+  await tick(t, 3949);
+  assert.equal(settledAt, undefined);
+  await tick(t, 1);
+  await finished;
+  assert.equal(settledAt, 'rejected');
+});
+
+test('afterEach returns without a report when the story is torn down during the quiet window', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const context = testContext(fakeWorker(), failingMode);
+  validationHook(context, hookOptions(recorder()));
+  const finished = testHook(context, hookOptions(recorder()));
+  await tick(t, 50);
+  context.abort();
+  assert.equal(await finished, undefined);
+  assert.deepEqual(context.reports, []);
+});
+
+test('a timeout does not stop a story in todo mode', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const context = testContext(worker);
+  validationHook(context, hookOptions(recorder()));
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(recorder()));
+  t.mock.timers.tick(4000);
+  await finished;
+  assert.equal(context.reports[0].status, 'warning');
+});
+
+test('afterEach returns without a report when the story is torn down while it waits', async () => {
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(recorder()));
+  context.abort();
+  assert.equal(await finished, undefined);
+  assert.deepEqual(context.reports, []);
+  assert.equal(await testHook(context, hookOptions(recorder())), undefined);
+  assert.deepEqual(context.reports, []);
+});
+
+test('the report holds only the entries and notices of its own render', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const first = testContext(worker);
+  validationHook(first, hookOptions(panel));
+  worker.started(getProfile(), 'first');
+  const result = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'first');
+  await result;
+  const second = testContext(worker);
+  validationHook(second, hookOptions(panel));
+  worker.started(new Request('http://localhost:6006/api/orders'), 'second');
+  const finished = testHook(second, hookOptions(panel));
+  worker.mocked(new Request('http://localhost:6006/api/orders'), jsonResponse(), 'second');
+  await finished;
+  assert.deepEqual(second.reports[0].result.entries.map(({ url }) => url), ['/api/orders']);
+  assert.deepEqual(second.reports[0].result.notices, []);
+});
+
+test('an invalid test parameter is a configuration error and the story uses defaultTest', async () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, { mokapi: { test: 'strict' } });
+  validationHook(context, hookOptions(panel, 'error'));
+  assert.deepEqual(panel.actions.slice(1).map(({ type, notice }) => [type, notice.kind, notice.message]), [
+    ['notice', 'config-error', "Mokapi: parameters.mokapi.test must be 'error', 'todo' or 'off'."],
+  ]);
+  await assert.rejects(testHook(context, hookOptions(panel, 'error')), /^Error: Mokapi: parameters\.mokapi\.test must be 'error', 'todo' or 'off'\.$/);
+  assert.equal(context.reports[0].status, 'failed');
+
+  const todo = testContext(worker, { mokapi: { test: 'strict' } });
+  validationHook(todo, hookOptions(panel, 'todo'));
+  await testHook(todo, hookOptions(panel, 'todo'));
+  assert.equal(todo.reports[0].status, 'warning');
+});
+
+test('afterEach adds no report with validation off, for a disabled story or in off mode and never fails then', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  for (const options of [
+    { validation: 'off', mokapi: { test: 'error' } },
+    { mokapi: { disable: true, test: 'error' } },
+    { mokapi: { test: 'off' } },
+  ]) {
+    const worker = fakeWorker();
+    const context = testContext(worker, options);
+    validationHook(context, hookOptions(recorder()));
+    worker.started(getProfile());
+    worker.mocked(getProfile(), jsonResponse());
+    assert.equal(await testHook(context, hookOptions(recorder())), undefined);
+    assert.deepEqual(context.reports, []);
+  }
+  assert.equal(await testHook(testContext(fakeWorker()), hookOptions(recorder())), undefined);
+});
+
+test('afterEach in error mode does not fail without a worker, without requests or for results outside the contract', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.noOperation));
+  const withoutWorker = testContext(undefined, failingMode);
+  validationHook(withoutWorker, hookOptions(recorder()));
+  await testHook(withoutWorker, hookOptions(recorder()));
+  assert.equal(withoutWorker.reports[0].status, 'passed');
+
+  const worker = fakeWorker();
+  const noRequest = testContext(worker, failingMode);
+  validationHook(noRequest, hookOptions(recorder()));
+  await testHook(noRequest, hookOptions(recorder()));
+  assert.equal(noRequest.reports[0].status, 'passed');
+
+  const panel = recorder();
+  const notInContract = testContext(worker, failingMode);
+  validationHook(notInContract, hookOptions(panel));
+  worker.started(getProfile());
+  const finished = testHook(notInContract, hookOptions(panel));
+  worker.mocked(getProfile(), jsonResponse());
+  await finished;
+  assert.equal(notInContract.reports[0].status, 'passed');
+});
+
 test('without context.msw nothing happens while validation is off', () => {
   const panel = recorder();
   validationHook(storyContext(undefined, { validation: 'off' }), hookOptions(panel));
@@ -376,6 +856,14 @@ test('panel starts empty and a render of a story clears its entries and notices'
   assert.deepEqual(initialPanelState, { renderId: 0, entries: [], notices: [] });
   const state = reduceAll(renderStarted(1), resultOf(1, 1), noticeOf(1, 'unreachable'), renderStarted(2));
   assert.deepEqual(state, { storyId: 'a--one', renderId: 2, entries: [], notices: [] });
+});
+
+test('panel keeps the test mode of the render and resets it with the next render', () => {
+  const started = (renderId, testMode) => ({ ...renderStarted(renderId), ...(testMode && { testMode }) });
+  assert.equal(reduceAll(started(1, 'error')).testMode, 'error');
+  assert.equal(reduceAll(started(1, 'error'), resultOf(1, 1, 'invalid'), noticeOf(1, 'timeout')).testMode, 'error');
+  assert.equal('testMode' in reduceAll(started(1, 'error'), started(2)), false);
+  assert.equal('testMode' in initialPanelState, false);
 });
 
 test('panel ignores answers of an earlier render', () => {
@@ -447,6 +935,28 @@ test('preview registers a beforeEach that sends results to the panel channel and
   assert.equal(fetch.mock.calls[0].arguments[0], 'http://localhost:9090/api/services/http/validate');
 });
 
+test('preview registers an afterEach that fails a story with a contract error in error mode and warns in todo mode', async (t) => {
+  const { addons } = await import('storybook/preview-api');
+  const { afterEach, beforeEach } = await import('../dist/preview.js');
+  addons.setChannel({ emit() {}, on() {}, off() {} });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const worker = fakeWorker();
+  const run = async (mokapi) => {
+    const context = testContext(worker, { mokapi });
+    beforeEach(context);
+    worker.started(getProfile());
+    const finished = afterEach(context);
+    worker.mocked(getProfile(), jsonResponse());
+    return { context, finished };
+  };
+  const failing = await run({ test: 'error' });
+  await assert.rejects(failing.finished, /^Error: Mokapi: 1 response does not match the contract\./);
+  assert.equal(failing.context.reports[0].status, 'failed');
+  const todo = await run({});
+  assert.equal(await todo.finished, undefined);
+  assert.equal(todo.context.reports[0].status, 'warning');
+});
+
 test('preset adds the preview annotation and the manager entry after the existing ones', () => {
   assert.deepEqual(previewAnnotations(['a.js']).map((file) => file.split('/').at(-1)), ['a.js', 'preview.js']);
   assert.deepEqual(managerEntries().map((file) => file.split('/').at(-1)), ['manager.js']);
@@ -455,7 +965,7 @@ test('preset adds the preview annotation and the manager entry after the existin
 test('preset defines the resolved options for the preview and sets up no proxy', () => {
   const config = viteFinal({ server: { port: 6006 } }, { dashboardUrl: 'http://localhost:9090/', defaultValidation: true });
   assert.deepEqual(JSON.parse(config.define.__MOKAPI_STORYBOOK_OPTIONS__), {
-    dashboardUrl: 'http://localhost:9090', defaultValidation: true,
+    dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'todo',
   });
   assert.deepEqual(config.server, { port: 6006 });
   assert.equal(JSON.stringify(config).includes('proxy'), false);

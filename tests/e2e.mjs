@@ -15,6 +15,11 @@ const require = createRequire(import.meta.url);
 
 const VALIDATE_PATH = '/api/services/http/validate';
 const TOGGLE_NAME = 'Validate with Mokapi';
+const TEST_MODE_TEXTS = {
+  error: 'Test mode: error. Contract errors make this story fail.',
+  todo: 'Test mode: todo. Contract errors are reported as warnings, the story stays green.',
+  off: 'Test mode: off. Contract errors are shown here only.',
+};
 const TOGGLE_TOOLTIPS = {
   on: 'Mokapi validation is on. Click to turn off.',
   off: 'Mokapi validation is off. Click to turn on.',
@@ -237,6 +242,83 @@ function trackValidationRequests(page, dashboard) {
   return requests;
 }
 
+// Records the `storyFinished` payloads of every frame from its creation on: the channel is created
+// while the preview boots, so the recorder hooks the global slot Storybook assigns it to. It runs in
+// every document (also the iframe's initial about:blank), so readers must tolerate a missing array.
+const recordFinishedStories = (context) => context.addInitScript(() => {
+  window.__storyFinished = [];
+  let channel;
+  Object.defineProperty(window, '__STORYBOOK_ADDONS_CHANNEL__', {
+    configurable: true,
+    get: () => channel,
+    set(next) {
+      if (next && next !== channel) next.on('storyFinished', (event) => window.__storyFinished.push(event));
+      channel = next;
+    },
+  });
+});
+
+// The last `storyFinished` of the story: after a remount that is the render that counts.
+async function finishedStory(page) {
+  const preview = page.frame({ name: 'storybook-preview-iframe' });
+  await preview.waitForFunction(() => window.__storyFinished?.length > 0, null, { timeout: 20000 });
+  return (await preview.evaluate(() => window.__storyFinished)).at(-1);
+}
+
+const mokapiReports = (finished) => finished.reporters.filter(({ type }) => type === 'mokapi');
+
+// Storybook's error display of the preview: the first line of the message and the rest.
+const errorDisplay = (frame) => frame.locator('body.sb-show-errordisplay');
+const errorTextOf = async (frame) =>
+  `${await frame.locator('#error-message').textContent()}\n${await frame.locator('#error-stack').textContent()}`;
+
+async function assertStoryFails(page, message) {
+  await errorDisplay(previewFrame(page)).waitFor();
+  await eventually(async () => assert.match(await errorTextOf(previewFrame(page)), message));
+  assert.equal((await finishedStory(page)).status, 'error');
+}
+
+async function assertStoryStaysGreen(page) {
+  const finished = await finishedStory(page);
+  assert.equal(finished.status, 'success');
+  assert.equal(await errorDisplay(previewFrame(page)).count(), 0);
+  return finished;
+}
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const operationLink = (page, status) => entries(page, status).getByTestId('mokapi-operation');
+const testModeLine = (page) => page.getByTestId('mokapi-test-mode');
+const dashboardOperationUrl = (dashboard, path) => `${dashboard}/dashboard/http/services/${path}`;
+
+// Runs the fixture's stories with @storybook/addon-vitest (Vitest browser mode, Vitest's default testTimeout)
+// and returns Vitest's JSON result of the stories whose export names are given.
+async function runStoriesWithVitest(env, outputFile, storyNames) {
+  const cli = join(dirname(require.resolve('vitest/package.json')), 'vitest.mjs');
+  const pattern = storyNames.map((name) => name.replace(/(?<=.)([A-Z])/g, ' $1')).join('|');
+  const child = spawn(process.execPath, [
+    cli, 'run', 'TestMode.stories', '--reporter=json', `--outputFile=${outputFile}`, '--testNamePattern', pattern,
+  ], { cwd: fixtureDirectory, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk) => { output += chunk; });
+  // A failing story makes Vitest exit with 1, so the exit code says nothing: the JSON file does.
+  await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+  let result;
+  try {
+    result = JSON.parse(await readFile(outputFile, 'utf8'));
+  } catch (error) {
+    throw new Error(`Vitest wrote no result\n${output.slice(-4000)}`, { cause: error });
+  }
+  const stories = result.testResults.flatMap(({ assertionResults }) => assertionResults);
+  const summary = stories.map(({ title, status, failureMessages }) =>
+    `${title}: ${status}${failureMessages.length ? ` (${failureMessages[0].split('\n')[0]})` : ''}`).join('\n');
+  return (name) => {
+    const story = stories.find(({ title }) => title.replace(/\s/g, '') === name);
+    assert.ok(story, `Vitest did not run ${name}\nResults:\n${summary}\n${output.slice(-4000)}`);
+    return { ...story, expect: (status) => assert.equal(story.status, status,
+      `${name} should be ${status} under Vitest\nResults:\n${summary}\n${output.slice(-4000)}`) };
+  };
+}
+
 // Validation runs after the response, so no request may show up shortly after the story rendered.
 async function assertNothingSent(requests) {
   await setTimeout(1000);
@@ -250,7 +332,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
   let browser;
   const storybooks = [];
   try {
-    const [apiPort, dashboardPort, storybookPort, validatingStorybookPort] = await unusedPorts(4);
+    const [apiPort, dashboardPort, storybookPort, validatingStorybookPort, failingStorybookPort] = await unusedPorts(5);
     const dashboard = `http://localhost:${dashboardPort}`;
 
     // Mokapi takes the HTTP port from the servers URL.
@@ -280,6 +362,10 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     };
     const storybook = await startFixtureStorybook(storybookPort, {});
     const validatingStorybook = await startFixtureStorybook(validatingStorybookPort, { MOKAPI_DEFAULT_VALIDATION: 'true' });
+    const failingStorybook = await startFixtureStorybook(failingStorybookPort, {
+      MOKAPI_DEFAULT_VALIDATION: 'true',
+      MOKAPI_DEFAULT_TEST: 'error',
+    });
 
     const keepFailureArtifacts = async (name, page, consoleLines) => {
       failureDirectory ??= await mkdtemp(join(tmpdir(), 'mokapi-storybook-e2e-failure-'));
@@ -291,6 +377,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     // Each scenario runs in a fresh browser context, so that no state leaks between them.
     const scenario = (name, run) => t.test(name, async () => {
       const context = await browser.newContext({ viewport: { width: 1280, height: 1600 } });
+      await recordFinishedStories(context);
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
       const consoleLines = [];
@@ -536,6 +623,184 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await showsText(profileInDocsStory(page), 'Jane Doe');
       await eventually(async () => assert.ok(sent.length > 0, 'validation request from the story iframe'));
       assert.equal(await toggleButton(page).count(), 0);
+    });
+
+    // Opens the story in the Storybook that has validation on from the start and waits for the panel.
+    const openValidated = async (page, id, storybookUnderTest = validatingStorybook) => {
+      await openStory(page, storybookUnderTest.url, { id });
+      await openMokapiPanel(page);
+    };
+
+    await scenario('a valid and an invalid response link to the matched operation in the dashboard', async (page) => {
+      await openValidated(page, 'profile--valid');
+      const link = operationLink(page, 'valid');
+      await link.waitFor();
+      assert.equal(await link.textContent(), 'GET /api/profile');
+      assert.equal(await link.getAttribute('title'), 'GET /api/profile');
+      assert.equal(await link.getAttribute('href'), dashboardOperationUrl(dashboard, 'Profile%20API/api/profile/get'));
+      assert.equal(await link.getAttribute('target'), '_blank');
+      assert.equal(await link.getAttribute('rel'), 'noreferrer');
+
+      await openValidated(page, 'profile--invalid');
+      assert.equal(await operationLink(page, 'invalid').textContent(), 'GET /api/profile');
+      assert.equal(await operationLink(page, 'invalid').getAttribute('title'), 'GET /api/profile');
+      assert.equal(
+        await operationLink(page, 'invalid').getAttribute('href'),
+        dashboardOperationUrl(dashboard, 'Profile%20API/api/profile/get'),
+      );
+    });
+
+    await scenario('the operation link shows the request, titles the path template and encodes its braces', async (page) => {
+      await openValidated(page, 'profile--path-pattern');
+      const link = operationLink(page, 'valid');
+      await link.waitFor();
+      assert.equal(await link.textContent(), 'GET /api/users/42');
+      assert.equal(await link.getAttribute('title'), 'GET /api/users/{id}');
+      assert.equal(await link.getAttribute('href'), dashboardOperationUrl(dashboard, 'Profile%20API/api/users/%7Bid%7D/get'));
+    });
+
+    await scenario('an entry that is not in the contract or not reachable has no operation link', async (page, context) => {
+      await openValidated(page, 'profile--not-in-contract');
+      await entries(page, 'not-in-contract').waitFor();
+      assert.equal(await page.getByTestId('mokapi-operation').count(), 0);
+
+      await context.route(`${dashboard}/**`, (route) => route.abort('connectionrefused'));
+      await openValidated(page, 'profile--valid');
+      await entries(page, 'unreachable').waitFor();
+      assert.equal(await page.getByTestId('mokapi-operation').count(), 0);
+    });
+
+    for (const [id, mode] of [['profile--error-invalid', 'error'], ['profile--todo-invalid', 'todo'], ['profile--off-invalid', 'off']]) {
+      await scenario(`the panel shows the test mode ${mode} of the story`, async (page) => {
+        await openValidated(page, id);
+        await showsText(testModeLine(page), TEST_MODE_TEXTS[mode]);
+      });
+    }
+
+    await scenario('an invalid test parameter shows the default test mode and a configuration notice', async (page) => {
+      await openValidated(page, 'profile--invalid-test-parameter');
+      await showsText(testModeLine(page), TEST_MODE_TEXTS.todo);
+      await notice(page, "Mokapi: parameters.mokapi.test must be 'error', 'todo' or 'off'.").waitFor();
+      await assertStoryStaysGreen(page);
+    });
+
+    await scenario('the panel shows no test mode with validation off or for a disabled story', async (page) => {
+      await openValidated(page, 'profile--error-disabled');
+      await assertStoryStaysGreen(page);
+      assert.equal(await testModeLine(page).count(), 0);
+
+      await openValidated(page, 'profile--error-invalid', storybook);
+      await page.getByText(/Turn on validation/).waitFor();
+      assert.equal(await testModeLine(page).count(), 0);
+    });
+
+    await scenario('with test error a response that does not match the contract fails the story', async (page) => {
+      await openValidated(page, 'profile--error-invalid');
+      const url = escapeRegExp(dashboardOperationUrl(dashboard, 'Profile%20API/api/profile/get'));
+      await assertStoryFails(page, new RegExp(
+        `Mokapi: 1 response does not match the contract\\.\\n+GET /api/profile -> GET /api/profile \\(${url}\\)\\n\\s+response\\.body: required properties are missing: email`,
+      ));
+      await entries(page, 'invalid').waitFor();
+    });
+
+    await scenario('with test error a Mokapi that is not reachable fails the story', async (page, context) => {
+      await context.route(`${dashboard}/**`, (route) => route.abort('connectionrefused'));
+      await openValidated(page, 'profile--error-valid');
+      await assertStoryFails(page, new RegExp(`Mokapi is not reachable at ${dashboard}`));
+    });
+
+    await scenario('with test error a Mokapi without the validate endpoint fails the story', async (page, context) => {
+      await context.route(`${dashboard}${VALIDATE_PATH}`, (route) =>
+        route.fulfill({ status: 405, headers: { 'Access-Control-Allow-Origin': '*' } }));
+      await openValidated(page, 'profile--error-valid');
+      await assertStoryFails(page, /does not support \/api\/services\/http\/validate/);
+    });
+
+    await scenario('with test error an unknown API fails the story', async (page) => {
+      await openValidated(page, 'profile--error-unknown-api');
+      await assertStoryFails(page, /api 'Unknown API' not found/);
+    });
+
+    await scenario('with test error a story that waits for its response and its validation still fails', async (page) => {
+      await openValidated(page, 'profile--error-delayed');
+      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+    });
+
+    await scenario('with test error a response that never comes fails the story after 4 s with a timeout notice', async (page) => {
+      await openValidated(page, 'profile--error-never-answers');
+      await assertStoryFails(page, /Mokapi validation did not finish within 4 s \(GET \/api\/profile\)\./);
+      await notice(page, /Mokapi validation did not finish within 4 s \(GET \/api\/profile\)\./).waitFor();
+    });
+
+    for (const id of ['profile--error-valid', 'profile--error-no-worker', 'profile--error-no-request', 'profile--error-bypass', 'profile--error-handler-throws']) {
+      await scenario(`with test error the story ${id} does not fail`, async (page) => {
+        await openValidated(page, id);
+        await assertStoryStaysGreen(page);
+      });
+    }
+
+    await scenario('with test error a disabled story and validation off never fail', async (page) => {
+      await openValidated(page, 'profile--error-disabled');
+      const disabled = await assertStoryStaysGreen(page);
+      assert.deepEqual(mokapiReports(disabled), []);
+
+      await openStory(page, storybook.url, { id: 'profile--error-invalid' });
+      assert.deepEqual(mokapiReports(await assertStoryStaysGreen(page)), []);
+    });
+
+    await scenario('with test todo the contract error stays green and is reported as a warning', async (page) => {
+      await openValidated(page, 'profile--todo-invalid');
+      const [report, ...others] = mokapiReports(await assertStoryStaysGreen(page));
+      assert.equal(others.length, 0);
+      assert.equal(report.status, 'warning');
+      assert.equal(report.version, 1);
+      assert.equal(report.result.entries[0].status, 'invalid');
+      assert.equal(
+        report.result.entries[0].operationUrl,
+        dashboardOperationUrl(dashboard, 'Profile%20API/api/profile/get'),
+      );
+    });
+
+    await scenario('with test off the contract error stays green and no report is added', async (page) => {
+      await openValidated(page, 'profile--off-invalid');
+      await entries(page, 'invalid').waitFor();
+      assert.deepEqual(mokapiReports(await assertStoryStaysGreen(page)), []);
+    });
+
+    await scenario('switching validation on counts only the render after the remount', async (page) => {
+      await openStory(page, storybook.url, { id: 'profile--error-invalid', validation: true });
+      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await openMokapiPanel(page);
+      assert.equal(await entries(page, 'invalid').count(), 1);
+    });
+
+    await scenario('on a Docs page a story with test error shows the error in its frame', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'docs-test-mode--docs', docs: true });
+      const story = previewFrame(page).frameLocator('#iframe--docs-test-mode--error-invalid').first();
+      await errorDisplay(story).waitFor();
+      await eventually(async () => assert.match(await errorTextOf(story), /Mokapi: 1 response does not match the contract\./));
+    });
+
+    await t.test('Vitest fails stories with contract errors', { timeout: 180000 }, async () => {
+      const storyNames = ['ErrorInvalid', 'ErrorNeverAnswers', 'ErrorValid', 'TodoInvalid', 'OffInvalid'];
+      const story = await runStoriesWithVitest(
+        { MOKAPI_DASHBOARD: dashboard, MOKAPI_DEFAULT_VALIDATION: 'true' },
+        join(directory, 'vitest.json'),
+        storyNames,
+      );
+      const failures = (name) => story(name).failureMessages.join('\n');
+      story('ErrorInvalid').expect('failed');
+      assert.match(failures('ErrorInvalid'), /Mokapi: 1 response does not match the contract\./);
+      // Vitest's own timeout would say "Test timed out", so this shows the addon's limit fits into the default.
+      story('ErrorNeverAnswers').expect('failed');
+      assert.match(failures('ErrorNeverAnswers'), /Mokapi validation did not finish within 4 s \(GET \/api\/profile\)\./);
+      for (const name of ['ErrorValid', 'TodoInvalid', 'OffInvalid']) story(name).expect('passed');
+    });
+
+    await scenario('defaultTest error fails a story without its own test parameter', async (page) => {
+      await openValidated(page, 'profile--invalid', failingStorybook);
+      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await showsText(testModeLine(page), TEST_MODE_TEXTS.error);
     });
   } finally {
     if (failureDirectory) console.error(`E2E failure artifacts kept in ${failureDirectory}`);

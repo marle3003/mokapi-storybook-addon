@@ -1,11 +1,7 @@
 import { http, HttpResponse, passthrough } from 'msw';
+import { jane, profileHandler } from './handlers';
 import { Profile } from './Profile';
 
-// A handler factory, as projects share them between stories and tests.
-const profileHandler = (profile: object, path = '/api/profile') =>
-  http.get(path, () => HttpResponse.json(profile));
-
-const jane = { name: 'Jane Doe', email: 'jane@example.com' };
 
 export default { title: 'Profile', component: Profile };
 
