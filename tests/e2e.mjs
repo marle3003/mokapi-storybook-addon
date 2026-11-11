@@ -277,12 +277,22 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
       const consoleLines = [];
-      page.on('console', (message) => consoleLines.push(`[${message.type()}] ${message.text()}`));
-      page.on('pageerror', (error) => consoleLines.push(`[pageerror] ${error.message}`));
+      const started = Date.now();
+      const log = (line) => consoleLines.push(`+${Date.now() - started}ms ${line}`);
+      page.on('console', (message) => log(`[${message.type()}] ${message.text()}`));
+      page.on('pageerror', (error) => log(`[pageerror] ${error.message}`));
+      page.on('framenavigated', (frame) => log(`[navigated] ${frame.name() || 'main'} ${frame.url()}`));
+      page.on('request', (request) => {
+        if (request.url() === `${dashboard}${VALIDATE_PATH}`) log(`[validate] ${request.postData()}`);
+      });
       try {
         await run(page, context);
       } catch (error) {
+        const panel = await entries(page).allTextContents().catch(() => []);
+        panel.forEach((text) => log(`[panel entry] ${text}`));
         await keepFailureArtifacts(name, page, consoleLines);
+        // CI keeps no files from the runner, so the log is the only trace there.
+        console.error(`--- ${name}\n${consoleLines.join('\n')}`);
         throw error;
       } finally {
         await context.close();
