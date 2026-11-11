@@ -508,13 +508,25 @@ const remountSteps = (...events) => events.reduce(
 ).remounts;
 const initialValidation = (validation) => ({ type: 'initial', validation });
 const switched = (validation, storyId = 'a--one') => ({ type: 'switched', validation, storyId });
+const started = (storyId = 'a--one') => ({ type: 'started', storyId });
 const finished = (storyId = 'a--one') => ({ type: 'finished', storyId });
 
 test('a switch remounts the story once it has finished rendering, not before', () => {
   assert.deepEqual(remountSteps(initialValidation('off'), switched('on')), []);
-  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished()), ['a--one']);
-  assert.deepEqual(remountSteps(initialValidation('on'), switched('off'), finished()), ['a--one']);
-  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished(), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), started()), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), started(), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(initialValidation('on'), switched('off'), started(), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), started(), finished(), finished()), ['a--one']);
+});
+
+// Storybook enqueues the re-render of a story that is still rendering when the global changes, and
+// runs it after the running render has finished. That STORY_FINISHED is not the one of the
+// re-render that already applied the switch, and a remount at that moment aborts the re-render.
+test('a render that was already running at the switch does not trigger the remount', () => {
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished()), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished(), started()), []);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished(), started(), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished(), started(), finished(), finished()), ['a--one']);
 });
 
 test('nothing is remounted without a switch of the value', () => {
@@ -527,5 +539,5 @@ test('nothing is remounted without a switch of the value', () => {
 test('a story change or another story finishing cancels the pending remount', () => {
   assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), { type: 'story-changed' }, finished()), []);
   assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished('a--two')), []);
-  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished('a--two'), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), started(), finished('a--two'), finished()), ['a--one']);
 });

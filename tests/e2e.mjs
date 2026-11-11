@@ -380,6 +380,20 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await entries(page, 'valid').waitFor();
     });
 
+    await scenario('switching validation on while the story is still rendering validates once without reloading the preview', async (page) => {
+      await open(page, { id: 'profile--slow-after-each' });
+      await previewFrame(page).locator('#storybook-root > *').first().waitFor();
+      const preview = page.frame({ name: 'storybook-preview-iframe' });
+      await preview.evaluate(() => { window.__marker = 'same document'; });
+      // The render is held in afterEach for seconds, so the switch arrives while it is pending.
+      await switchValidation(page, 'on');
+      await openMokapiPanel(page);
+      await entries(page, 'valid').first().waitFor();
+      await setTimeout(1500);
+      assert.equal(await entries(page).count(), 1);
+      assert.equal(await preview.evaluate(() => window.__marker), 'same document');
+    });
+
     await scenario('a story with disable true sends nothing', async (page) => {
       const sent = trackValidationRequests(page, dashboard);
       await open(page, { id: 'profile--disabled', validation: true });

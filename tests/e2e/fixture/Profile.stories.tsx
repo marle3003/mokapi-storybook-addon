@@ -35,6 +35,12 @@ export const PostInvalidBody = {
   parameters: { msw: { handlers: [http.post('/api/profile', () => HttpResponse.json(jane))] } },
 };
 
+// The render is still pending (afterEach) when validation is switched on, so Storybook enqueues the re-render.
+export const SlowAfterEach = {
+  afterEach: () => new Promise((resolve) => setTimeout(resolve, 3000)),
+  parameters: { msw: { handlers: [profileHandler(jane)] } },
+};
+
 export const Passthrough = {
   parameters: { msw: { handlers: [http.get('/api/profile', () => passthrough())] } },
 };

@@ -2,7 +2,7 @@
 // The Storybook manager provides `react` but not `react/jsx-runtime`, so this file must not use the automatic runtime.
 import React, { useSyncExternalStore, type ReactNode } from 'react';
 import { addons, types, useGlobals, useStorybookState } from 'storybook/manager-api';
-import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_FINISHED } from 'storybook/internal/core-events';
+import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDER_PHASE_CHANGED } from 'storybook/internal/core-events';
 import { Badge, Link, ScrollArea, ToggleButton } from 'storybook/internal/components';
 import { VerifiedIcon } from '@storybook/icons';
 import { styled } from 'storybook/theming';
@@ -171,7 +171,11 @@ addons.register('mokapi', (api) => {
     handle({ type: 'switched', validation: globals.mokapiValidation, storyId: inStoryView ? api.getCurrentStoryData()?.id : undefined });
   });
   api.on(STORY_CHANGED, () => handle({ type: 'story-changed' }));
-  api.on(STORY_FINISHED, ({ storyId }: { storyId: string }) => handle({ type: 'finished', storyId }));
+  // `loading` is the first phase of every render, `finished` the last one.
+  api.on(STORY_RENDER_PHASE_CHANGED, ({ newPhase, storyId }: { newPhase: string; storyId: string }) => {
+    if (newPhase === 'loading') handle({ type: 'started', storyId });
+    if (newPhase === 'finished') handle({ type: 'finished', storyId });
+  });
   addons.add(TOGGLE_ID, {
     type: types.TOOL,
     title: TOGGLE_NAME,
