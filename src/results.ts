@@ -25,12 +25,22 @@ export interface Notice {
   message: string;
 }
 
+export type ReportStatus = 'passed' | 'warning' | 'failed';
+
+/** The verdict of the story's afterEach: the status and the report text (`errorMessage`, empty when passed). */
+export interface Report {
+  status: ReportStatus;
+  message: string;
+}
+
 // renderId is unique per mount of a story (a re-render keeps it), so late answers of an earlier mount can be recognized.
+// The report names its story, because the sidebar status is set for it and stories on a Docs page count their renderIds each.
 // testMode is set while the render is validated.
 export type PanelAction =
   | { type: 'render-started'; storyId: string; renderId: number; testMode?: TestMode }
   | { type: 'result'; renderId: number; entry: Entry }
-  | { type: 'notice'; renderId: number; notice: Notice };
+  | { type: 'notice'; renderId: number; notice: Notice }
+  | ({ type: 'report'; renderId: number; storyId: string } & Report);
 
 export interface PanelState {
   storyId?: string;
@@ -38,6 +48,8 @@ export interface PanelState {
   testMode?: TestMode;
   entries: Entry[];
   notices: Notice[];
+  /** Set once the story's afterEach has judged the render. */
+  report?: Report;
 }
 
 export const initialPanelState: PanelState = { renderId: 0, entries: [], notices: [] };
@@ -47,6 +59,7 @@ export function reducePanel(state: PanelState, action: PanelAction): PanelState 
     return { ...initialPanelState, storyId: action.storyId, renderId: action.renderId, ...(action.testMode && { testMode: action.testMode }) };
   }
   if (action.renderId !== state.renderId) return state;
+  if (action.type === 'report') return { ...state, report: { status: action.status, message: action.message } };
   if (action.type === 'result') {
     return { ...state, entries: [...state.entries, action.entry].sort((a, b) => a.sequence - b.sequence) };
   }

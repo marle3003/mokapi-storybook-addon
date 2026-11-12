@@ -7,7 +7,7 @@ import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../d
 import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { toggleState } from '../dist/toggle.js';
 import { testHook, validationHook } from '../dist/listener.js';
-import { errorMessage, operationUrl, reportStatus, resolveTestMode, testModeText } from '../dist/report.js';
+import { countLines, errorMessage, operationUrl, reportStatus, resolveTestMode, sidebarStatus, statusLine, testModeText } from '../dist/report.js';
 import { classify, sendValidation, serializePair } from '../dist/validation.js';
 
 test('options default to the local Mokapi dashboard and validation off', () => {
@@ -488,6 +488,49 @@ test('requests are attributed to the story that rendered last', async (t) => {
   assert.equal((await result).renderId, secondRender);
 });
 
+const unreachableEntry = () => ({ ...validEntry(), status: 'unreachable' });
+
+test('counts name the validated responses and one line per kind that occurs', () => {
+  assert.deepEqual(countLines([validEntry(), invalidEntry(), invalidEntry(), notInContractEntry(), unreachableEntry()]), [
+    '5 responses validated', '1 valid', '2 invalid', '1 not in contract', '1 Mokapi not reachable',
+  ]);
+});
+
+test('counts leave out kinds without entries and use the singular for one response', () => {
+  assert.deepEqual(countLines([invalidEntry()]), ['1 response validated', '1 invalid']);
+  assert.deepEqual(countLines([validEntry(), validEntry()]), ['2 responses validated', '2 valid']);
+});
+
+test('counts are empty without entries', () => {
+  assert.deepEqual(countLines([]), []);
+});
+
+test('status line says validating until the report exists, in every mode but off', () => {
+  for (const mode of ['error', 'todo']) assert.equal(statusLine(mode, undefined), 'Validating...');
+  assert.equal(statusLine('off', undefined), undefined);
+  assert.equal(statusLine('off', { status: 'warning', message: 'ignored' }), undefined);
+  assert.equal(statusLine(undefined, undefined), undefined);
+});
+
+test('status line shows the report status with the first line of its message', () => {
+  const message = 'Mokapi: 1 response does not match the contract.\n\nGET /api/profile\n  response.body: not valid';
+  assert.equal(statusLine('error', { status: 'failed', message }), 'Failed: Mokapi: 1 response does not match the contract.');
+  assert.equal(statusLine('todo', { status: 'warning', message }), 'Warning: Mokapi: 1 response does not match the contract.');
+  assert.equal(statusLine('error', { status: 'passed', message: '' }), 'Passed');
+});
+
+test('sidebar status is an error for a failed and a warning for a warning report, titled Mokapi', () => {
+  const message = 'Mokapi: 1 response does not match the contract.\n\nGET /api/profile\n  response.body: not valid';
+  const base = { typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', description: 'Mokapi: 1 response does not match the contract.' };
+  assert.deepEqual(sidebarStatus('a--one', { status: 'failed', message }), { ...base, value: 'status-value:error' });
+  assert.deepEqual(sidebarStatus('a--one', { status: 'warning', message }), { ...base, value: 'status-value:warning' });
+});
+
+test('sidebar status is none for a passed check and without a report', () => {
+  assert.equal(sidebarStatus('a--one', { status: 'passed', message: '' }), undefined);
+  assert.equal(sidebarStatus('a--one', undefined), undefined);
+});
+
 test('a Mokapi that cannot be reached is reported as entry and as notice of the same render', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('Failed to fetch'); });
   const panel = recorder();
@@ -521,6 +564,11 @@ function testContext(worker, options) {
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));
 const failingMode = { mokapi: { test: 'error' } };
+// addon-vitest runs the stories in Vitest's browser mode, where Vitest sets this global. Only there afterEach throws.
+const underVitest = (t) => {
+  globalThis.__vitest_browser__ = true;
+  t.after(() => { delete globalThis.__vitest_browser__; });
+};
 
 test('afterEach waits for a delayed response and its validation before it reports', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
@@ -539,24 +587,66 @@ test('afterEach waits for a delayed response and its validation before it report
   assert.deepEqual(context.reports[0].result.entries.map(({ status }) => status), ['invalid']);
 });
 
-test('afterEach in error mode adds a failed report and throws the message of the invalid responses', async (t) => {
+const invalidMessage = [
+  'Mokapi: 1 response does not match the contract.',
+  '',
+  'GET /api/profile?id=1 -> GET /profile (http://localhost:8080/dashboard/http/services/Profile%20API/profile/get)',
+  '  response.body: required properties are missing: email',
+].join('\n');
+
+// Runs afterEach for one invalid response of a story with the given parameters.
+async function runInvalidStory(t, mokapi) {
   t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
   const panel = recorder();
   const worker = fakeWorker();
-  const context = testContext(worker, { mokapi: { test: 'error' } });
+  const context = testContext(worker, { mokapi });
   validationHook(context, hookOptions(panel));
   worker.started(getProfile());
   const finished = testHook(context, hookOptions(panel));
   worker.mocked(getProfile(), jsonResponse());
-  await assert.rejects(finished, {
-    message: [
-      'Mokapi: 1 response does not match the contract.',
-      '',
-      'GET /api/profile?id=1 -> GET /profile (http://localhost:8080/dashboard/http/services/Profile%20API/profile/get)',
-      '  response.body: required properties are missing: email',
-    ].join('\n'),
-  });
+  return { panel, context, finished };
+}
+
+test('afterEach in error mode adds a failed report and sends it to the panel', async (t) => {
+  const { panel, context, finished } = await runInvalidStory(t, { test: 'error' });
+  await finished;
   assert.equal(context.reports[0].status, 'failed');
+  const { renderId } = panel.actions[0];
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId, storyId: 'profile--valid', status: 'failed', message: invalidMessage });
+});
+
+test('afterEach in error mode throws the message of the invalid responses under Vitest', async (t) => {
+  underVitest(t);
+  const { panel, context, finished } = await runInvalidStory(t, { test: 'error' });
+  await assert.rejects(finished, { message: invalidMessage });
+  assert.equal(context.reports[0].status, 'failed');
+  assert.equal(panel.actions.at(-1).type, 'report');
+});
+
+test('afterEach in todo mode sends a warning report and passes the story, also under Vitest', async (t) => {
+  underVitest(t);
+  const { panel, context, finished } = await runInvalidStory(t, { test: 'todo' });
+  await finished;
+  assert.equal(context.reports[0].status, 'warning');
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'warning', message: invalidMessage });
+});
+
+test('afterEach sends a passed report with an empty message', async () => {
+  const panel = recorder();
+  const context = testContext(fakeWorker(), failingMode);
+  validationHook(context, hookOptions(panel));
+  await testHook(context, hookOptions(panel));
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'passed', message: '' });
+});
+
+test('afterEach sends no report in off mode, with validation off or for a disabled story', async () => {
+  for (const options of [{ validation: 'off', mokapi: { test: 'error' } }, { mokapi: { disable: true, test: 'error' } }, { mokapi: { test: 'off' } }]) {
+    const panel = recorder();
+    const context = testContext(fakeWorker(), options);
+    validationHook(context, hookOptions(panel));
+    await testHook(context, hookOptions(panel));
+    assert.equal(panel.actions.some(({ type }) => type === 'report'), false);
+  }
 });
 
 test('afterEach does not wait for requests that MSW bypasses', async (t) => {
@@ -606,10 +696,11 @@ test('the 500 that MSW answers for a throwing handler is not validated', async (
   await settled();
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(context.reports[0].status, 'passed');
-  assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started']);
+  assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started', 'report']);
 });
 
 test('a validation that does not finish within 4 s fails with one notice per request', async (t) => {
+  underVitest(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const panel = recorder();
   const worker = fakeWorker();
@@ -627,7 +718,8 @@ test('a validation that does not finish within 4 s fails with one notice per req
       'Mokapi validation did not finish within 4 s (GET /api/orders).',
     ].join('\n'),
   });
-  assert.deepEqual(panel.actions.slice(1).map(({ notice }) => notice.kind), ['timeout', 'timeout']);
+  assert.deepEqual(panel.actions.slice(1, 3).map(({ notice }) => notice.kind), ['timeout', 'timeout']);
+  assert.equal(panel.actions[3].type, 'report');
   assert.equal(context.reports[0].status, 'failed');
   assert.equal(context.reports[0].result.notices.length, 2);
 });
@@ -668,6 +760,7 @@ test('afterEach ignores a request that starts after the quiet window', async (t)
 });
 
 test('the quiet window ends after 1 s even if requests keep starting, and the 4 s limit counts from the start', async (t) => {
+  underVitest(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const worker = fakeWorker();
   const context = testContext(worker, failingMode);
@@ -687,6 +780,7 @@ test('the quiet window ends after 1 s even if requests keep starting, and the 4 
 });
 
 test('a request that starts in the quiet window times out 4 s after afterEach began', async (t) => {
+  underVitest(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const worker = fakeWorker();
   const context = testContext(worker, failingMode);
@@ -727,13 +821,15 @@ test('a timeout does not stop a story in todo mode', async (t) => {
 
 test('afterEach returns without a report when the story is torn down while it waits', async () => {
   const worker = fakeWorker();
+  const panel = recorder();
   const context = testContext(worker, failingMode);
-  validationHook(context, hookOptions(recorder()));
+  validationHook(context, hookOptions(panel));
   worker.started(getProfile());
-  const finished = testHook(context, hookOptions(recorder()));
+  const finished = testHook(context, hookOptions(panel));
   context.abort();
   assert.equal(await finished, undefined);
   assert.deepEqual(context.reports, []);
+  assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started']);
   assert.equal(await testHook(context, hookOptions(recorder())), undefined);
   assert.deepEqual(context.reports, []);
 });
@@ -801,6 +897,7 @@ test('a re-render of the mounted story appends the entries of its own requests t
 });
 
 test('afterEach of a re-render in error mode fails on the invalid entry of the mount', async (t) => {
+  underVitest(t);
   t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
   const panel = recorder();
   const worker = fakeWorker();
@@ -815,6 +912,26 @@ test('afterEach of a re-render in error mode fails on the invalid entry of the m
   validationHook(rerender, hookOptions(panel));
   await assert.rejects(testHook(rerender, hookOptions(panel)), /^Error: Mokapi: 1 response does not match the contract\./);
   assert.equal(rerender.reports[0].status, 'failed');
+});
+
+test('a re-render sends its report with the render id of the mount', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker, failingMode);
+  validationHook(mounted, hookOptions(panel));
+  const { renderId } = panel.actions[0];
+  worker.started(getProfile(), 'mount');
+  const finishedMount = testHook(mounted, hookOptions(panel));
+  worker.mocked(getProfile(), jsonResponse(), 'mount');
+  await finishedMount;
+
+  const rerender = rerenderOf(mounted, worker, failingMode);
+  validationHook(rerender, hookOptions(panel));
+  await testHook(rerender, hookOptions(panel));
+  const reports = panel.actions.filter(({ type }) => type === 'report');
+  assert.deepEqual(reports.map((report) => [report.renderId, report.status]), [[renderId, 'failed'], [renderId, 'failed']]);
+  assert.equal(panel.actions.reduce(reducePanel, initialPanelState).report.status, 'failed');
 });
 
 test('a re-render that switches validation off does not judge the results of the mount', async (t) => {
@@ -898,7 +1015,8 @@ test('the answer for a request of the previous mount does not reach the list of 
   assert.deepEqual(shown.entries, []);
 });
 
-test('an invalid test parameter is a configuration error and the story uses defaultTest', async () => {
+test('an invalid test parameter is a configuration error and the story uses defaultTest', async (t) => {
+  underVitest(t);
   const panel = recorder();
   const worker = fakeWorker();
   const context = testContext(worker, { mokapi: { test: 'strict' } });
@@ -1006,6 +1124,21 @@ test('panel keeps the test mode of the render and resets it with the next render
   assert.equal('testMode' in initialPanelState, false);
 });
 
+const reportOf = (renderId, status = 'failed', message = 'Mokapi: 1 response does not match the contract.') => ({ type: 'report', renderId, storyId: 'a--one', status, message });
+
+test('panel keeps the report of the current render and clears it with the next render', () => {
+  const state = reduceAll(renderStarted(1), resultOf(1, 1, 'invalid'), reportOf(1));
+  assert.deepEqual(state.report, { status: 'failed', message: 'Mokapi: 1 response does not match the contract.' });
+  assert.equal(state.entries.length, 1);
+  assert.equal('report' in reduceAll(renderStarted(1), reportOf(1), renderStarted(2)), false);
+  assert.equal('report' in initialPanelState, false);
+});
+
+test('panel ignores the report of an earlier render', () => {
+  const state = reduceAll(renderStarted(1), renderStarted(2), reportOf(1));
+  assert.equal('report' in state, false);
+});
+
 test('panel ignores answers of an earlier render', () => {
   const state = reduceAll(renderStarted(1), renderStarted(2, 'a--two'), resultOf(1, 1), noticeOf(1, 'unreachable'));
   assert.deepEqual([state.storyId, state.entries, state.notices], ['a--two', [], []]);
@@ -1076,6 +1209,7 @@ test('preview registers a beforeEach that sends results to the panel channel and
 });
 
 test('preview registers an afterEach that fails a story with a contract error in error mode and warns in todo mode', async (t) => {
+  underVitest(t);
   const { addons } = await import('storybook/preview-api');
   const { afterEach, beforeEach } = await import('../dist/preview.js');
   addons.setChannel({ emit() {}, on() {}, off() {} });

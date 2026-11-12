@@ -1,13 +1,13 @@
 /** @jsxRuntime classic */
 // The Storybook manager provides `react` but not `react/jsx-runtime`, so this file must not use the automatic runtime.
 import React, { useSyncExternalStore, type ReactNode } from 'react';
-import { addons, types, useGlobals, useStorybookState } from 'storybook/manager-api';
+import { addons, experimental_getStatusStore, types, useGlobals, useStorybookState } from 'storybook/manager-api';
 import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDER_PHASE_CHANGED } from 'storybook/internal/core-events';
 import { Badge, Link, ScrollArea, ToggleButton } from 'storybook/internal/components';
 import { VerifiedIcon } from '@storybook/icons';
 import { styled } from 'storybook/theming';
 import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
-import { testModeText } from './report.js';
+import { countLines, KIND_LABELS, sidebarStatus, statusLine, STATUS_TYPE_ID, testModeText } from './report.js';
 import {
   PANEL_EVENT,
   initialPanelState,
@@ -18,6 +18,7 @@ import {
   type Notice,
   type PanelAction,
   type PanelState,
+  type ReportStatus,
 } from './results.js';
 import { toggleState } from './toggle.js';
 import type { ResolvedAddonOptions } from './types.js';
@@ -31,12 +32,7 @@ declare global {
 const PANEL_ID = 'mokapi/validation';
 const TOGGLE_ID = 'mokapi/validation-toggle';
 const TOGGLE_NAME = 'Validate with Mokapi';
-const STATUS_LABELS: Record<Entry['status'], string> = {
-  valid: 'valid',
-  invalid: 'invalid',
-  'not-in-contract': 'not in contract',
-  unreachable: 'Mokapi not reachable',
-};
+const TEST_PROVIDER_ID = 'mokapi/test-provider';
 
 // The panel is only mounted while its tab is open, but the badge must count while it is closed.
 // So the results live here and both the tab title and the panel subscribe to them.
@@ -80,6 +76,15 @@ const EntryStatus = styled.strong<{ status: Entry['status'] }>(({ theme, status 
 }));
 const EntryUrl = styled.span(({ theme }) => ({ fontFamily: theme.typography.fonts.mono }));
 const Errors = styled.ul({ margin: '6px 0 0', paddingLeft: 20 });
+const ProviderLabel = styled.div({ padding: '8px 12px' });
+const ReportHeader = styled.h2({ margin: '0 0 8px', fontSize: 'inherit', fontWeight: 'bold' });
+// Without a report the story is still validating.
+const ReportStatusLine = styled.p<{ status?: ReportStatus }>(({ theme, status }) => ({
+  margin: '0 0 8px',
+  fontWeight: 'bold',
+  color: status === 'failed' ? theme.color.negative : status === 'warning' ? theme.color.warning : status === 'passed' ? theme.color.positive : theme.color.defaultText,
+}));
+const ReportCounts = styled.ul({ margin: '0 0 8px', padding: 0, listStyle: 'none' });
 const NoticeMessage = styled.p<{ kind: Notice['kind'] }>(({ theme, kind }) => ({
   color: kind === 'worker-missing' ? theme.color.warning : theme.color.negative,
 }));
@@ -98,7 +103,7 @@ function EntryItem({ entry }: { entry: Entry }) {
   const request = `${entry.method} ${entry.url}`;
   return (
     <EntryRow data-testid="mokapi-entry" data-status={entry.status}>
-      <EntryStatus status={entry.status}>{STATUS_LABELS[entry.status]}</EntryStatus>
+      <EntryStatus status={entry.status}>{KIND_LABELS[entry.status]}</EntryStatus>
       {' '}
       <EntryUrl>
         {entry.operation && entry.operationUrl ? (
@@ -150,14 +155,23 @@ function PanelFrame({ children }: { children: ReactNode }) {
 function Panel() {
   const [globals] = useGlobals();
   const { selectedPanel, layout } = useStorybookState();
-  const { entries, notices, testMode } = useResultsOfSelectedStory();
+  const { entries, notices, testMode, report } = useResultsOfSelectedStory();
   const dashboardUrl = window.__MOKAPI_PANEL_OPTIONS__?.dashboardUrl;
   if (selectedPanel !== PANEL_ID || !layout.showPanel) return null;
+  const line = statusLine(testMode, report);
+  const counts = countLines(entries);
   if (globals.mokapiValidation !== 'on') {
     return <PanelFrame><p>{`Turn on validation with the "${TOGGLE_NAME}" toggle in the toolbar.`}</p></PanelFrame>;
   }
   return (
     <PanelFrame>
+      <ReportHeader>Mokapi Contract Validation</ReportHeader>
+      {line && <ReportStatusLine status={report?.status} data-testid="mokapi-report-status">{line}</ReportStatusLine>}
+      {counts.length > 0 && (
+        <ReportCounts data-testid="mokapi-report-counts">
+          {counts.map((count) => <li key={count}>{count}</li>)}
+        </ReportCounts>
+      )}
       {testMode && <p data-testid="mokapi-test-mode">{testModeText(testMode)}</p>}
       {notices.map((notice) => (
         <NoticeMessage key={`${notice.kind}-${notice.message}`} kind={notice.kind} role="alert">{notice.message}</NoticeMessage>
@@ -172,7 +186,19 @@ function Panel() {
 }
 
 addons.register('mokapi', (api) => {
-  api.on(PANEL_EVENT, receive);
+  const statusStore = experimental_getStatusStore(STATUS_TYPE_ID);
+  api.on(PANEL_EVENT, (action: PanelAction) => {
+    receive(action);
+    if (action.type !== 'report') return;
+    const status = sidebarStatus(action.storyId, action);
+    if (status) statusStore.set([status]);
+    else statusStore.unset([action.storyId]);
+  });
+  // Selecting the status in the sidebar shows the details.
+  statusStore.onSelect(() => {
+    api.setSelectedPanel(PANEL_ID);
+    api.togglePanel(true);
+  });
   let remount = nextRemount(initialRemountState, { type: 'initial', validation: api.getGlobals().mokapiValidation }).state;
   const handle = (event: RemountEvent): void => {
     const next = nextRemount(remount, event);
@@ -196,6 +222,12 @@ addons.register('mokapi', (api) => {
     title: TOGGLE_NAME,
     match: ({ viewMode, tabId }) => viewMode === 'story' && !tabId,
     render: () => <ValidationToggle />,
+  });
+  // Storybook's "Clear all statuses" calls `clear` of every test provider. The provider has no run of its own.
+  addons.add(TEST_PROVIDER_ID, {
+    type: types.experimental_TEST_PROVIDER,
+    clear: () => statusStore.unset(),
+    render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
   });
   addons.add(PANEL_ID, {
     type: types.PANEL,

@@ -1,5 +1,5 @@
 import { http, HttpResponse, passthrough } from 'msw';
-import { jane, profileHandler } from './handlers';
+import { jane, profileHandler, userHandler } from './handlers';
 import { Profile } from './Profile';
 
 
@@ -12,7 +12,7 @@ export const Invalid = { parameters: { msw: { handlers: [profileHandler({ name: 
 
 export const PathPattern = {
   args: { path: '/api/users/42' },
-  parameters: { msw: { handlers: [http.get('/api/users/:id', () => HttpResponse.json(jane))] } },
+  parameters: { msw: { handlers: [userHandler] } },
 };
 
 export const NotInContract = {

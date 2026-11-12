@@ -251,8 +251,12 @@ const untilAborted = (abortSignal: AbortSignal): Promise<Outcome> => new Promise
   abortSignal.addEventListener('abort', () => resolve('aborted'), { once: true });
 });
 
-// Runs after every story: waits for the validations and reports the result to Storybook. In error mode
-// a failing result throws, so Storybook shows its error display and finishes the story with status error.
+// addon-vitest runs the stories in Vitest's browser mode, where Vitest sets this global (Storybook's own
+// `isTestEnvironment` checks it too). Vitest fails a test only on a thrown error, not on a failed report.
+const isVitestBrowserRun = (): boolean => (globalThis as { __vitest_browser__?: unknown }).__vitest_browser__ === true;
+
+// Runs after every story: waits for the validations, reports the result to Storybook and the panel. A failed
+// report alone makes Storybook finish the story with status error, so in error mode it throws only under Vitest.
 // The 4 s limit counts from the start, the quiet window included.
 export async function testHook(context: TestContext, options: HookOptions): Promise<void> {
   const render = rendersOfContext.get(context);
@@ -281,7 +285,9 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
   }
 
   const status = reportStatus(render.state, render.mode);
+  const message = errorMessage(render.state);
   const { entries, notices } = render.state;
   context.reporting.addReport({ type: 'mokapi', version: 1, status, result: { entries, notices } });
-  if (status === 'failed') throw new Error(errorMessage(render.state));
+  announce(render, options.emit, { type: 'report', renderId: render.renderId, storyId: context.id, status, message });
+  if (status === 'failed' && isVitestBrowserRun()) throw new Error(message);
 }

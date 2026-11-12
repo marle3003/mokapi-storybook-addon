@@ -5,3 +5,6 @@ export const profileHandler = (profile: object, path = '/api/profile') =>
   http.get(path, () => HttpResponse.json(profile));
 
 export const jane = { name: 'Jane Doe', email: 'jane@example.com' };
+
+// Matches the contract path `/api/users/{id}`.
+export const userHandler = http.get('/api/users/:id', () => HttpResponse.json(jane));

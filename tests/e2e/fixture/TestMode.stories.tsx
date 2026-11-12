@@ -1,5 +1,5 @@
 import { delay, http, HttpResponse, passthrough } from 'msw';
-import { jane, profileHandler } from './handlers';
+import { jane, profileHandler, userHandler } from './handlers';
 import { Profile } from './Profile';
 
 // Same title as Profile.stories.tsx, so the ids are profile--error-invalid etc. The file is left out of
@@ -35,6 +35,17 @@ export const ErrorValid = {
     mokapi: { test: 'error' },
     msw: { handlers: [profileHandler(jane), profileHandler({ name: 'Settings' }, '/api/settings')] },
   },
+};
+
+// One valid and one invalid response, for the counts in the panel.
+export const ErrorMixed = {
+  render: () => (
+    <>
+      <Profile />
+      <Profile path="/api/users/42" />
+    </>
+  ),
+  parameters: { mokapi: { test: 'error' }, msw: { handlers: [profileHandler(invalidProfile), userHandler] } },
 };
 
 export const ErrorUnknownApi = {

@@ -11,7 +11,7 @@ in the story when a mock drifts from the API.
 - **One toolbar toggle:** an icon button that turns validation on or off. Off sends nothing.
 - **Your MSW setup stays yours:** nothing Mokapi-specific goes into `.storybook/preview.ts` or into your stories.
 - **Panel with badge:** every validated response shows as valid, invalid or not in the contract, with Mokapi's error messages. The tab shows how many are invalid.
-- **Failing stories:** optionally, a story fails when its responses don't match the contract, so CI catches contract drift.
+- **Failing stories:** optionally, a story fails when its responses don't match the contract, so CI catches contract drift. In Storybook the story gets an error or warning icon in the sidebar.
 - **No change for the component:** it gets the MSW response unchanged and without delay.
 
 ![Storybook with Mokapi validation switched on: the story's MSW mock is missing the required email property, so the Mokapi panel lists the response as invalid with the error and the tab shows a badge](docs/screenshot.png)
@@ -49,7 +49,7 @@ with `passthrough()` or that no handler matches are not sent.
 ## Requirements
 
 - [Mokapi](https://mokapi.io/docs/get-started/installation) 0.58.0 or newer
-- Storybook 10.6.4 or newer with the Vite builder and CSF3 stories
+- Storybook 10.6.7 or newer with the Vite builder and CSF3 stories
 - MSW 2.15.0 or newer
 - React 18 or newer (used for the addon panel only)
 - Node.js 22.12.0 or newer
@@ -236,6 +236,38 @@ no link.
 The tab title shows a badge with the number of invalid responses. Responses that
 are not in the contract and not-reachable entries are not counted.
 
+While validation is on, the panel starts with the report header **Mokapi
+Contract Validation**. Below it come a status line and the counts:
+
+```text
+Mokapi Contract Validation
+Failed: Mokapi: 1 response does not match the contract.
+
+2 responses validated
+1 valid
+1 invalid
+```
+
+The status line depends on the test mode of the story, see
+[Failing stories](#failing-stories):
+
+| Status line | When |
+|-------------|------|
+| `Validating...` | The story is still waiting for its requests and their validation |
+| `Failed: <message>` | Test mode `'error'` and a failing result. `<message>` is the first line of the [error message](#error-message) |
+| `Warning: <message>` | Test mode `'todo'` and a failing result, with the same first line |
+| `Passed` | No failing result |
+
+In test mode `'off'` there is no status line. If a story is aborted before it
+reports, for example because you switch stories, the line stays at
+`Validating...` until the story is mounted again. The details of a failed or
+warning report are in the entries and notices below the counts.
+
+The counts update as the results come in. `N responses validated` counts all
+entries since the story was mounted. One line per kind follows (`valid`,
+`invalid`, `not in contract`, `Mokapi not reachable`), and kinds that don't
+occur are left out.
+
 While validation is on, the panel also shows the test mode of the selected
 story, so you can see what a CI run does with it, see
 [Failing stories](#failing-stories):
@@ -268,9 +300,14 @@ story has a failing result:
 
 | Mode               | Report status | Story                                                                 |
 |--------------------|---------------|-----------------------------------------------------------------------|
-| `'error'`          | `failed`      | Storybook shows its error display and finishes the story with status `error` |
-| `'todo'` (default) | `warning`     | The story stays green                                                 |
+| `'error'`          | `failed`      | In the Storybook UI the story finishes with status `error` and gets an error icon in the sidebar. Under `@storybook/addon-vitest` the test fails |
+| `'todo'` (default) | `warning`     | The story stays green and gets a warning icon in the sidebar          |
 | `'off'`            | no report     | The story stays green                                                 |
+
+In the Storybook UI the addon doesn't throw an error for a failed story. There
+is no error display, no entry under **Interactions** and no red error screen in
+the preview. The story finishes with status `error` because of its `failed`
+report, and the **Mokapi** panel shows the status line and the details.
 
 Set the default for all stories in `.storybook/main.ts`:
 
@@ -325,9 +362,32 @@ validation is still open then, the story fails with
 `Mokapi validation did not finish within 4 s (GET /api/profile/1).`, one request
 per line if several.
 
+### Sidebar status
+
+When a story with validation on has its report, the addon gives it a status in
+Storybook's status store:
+
+| Report | Sidebar status |
+|--------|----------------|
+| `failed` (mode `'error'`) | error |
+| `warning` (mode `'todo'`) | warning |
+| `passed`, mode `'off'`, validation off, `disable: true` | none |
+
+The status has the title `Mokapi`. Its description is the first line of the
+[error message](#error-message), for example
+`Mokapi: 1 response does not match the contract.`. Open the context menu of the
+story in the sidebar and select the status to open the **Mokapi** panel.
+
+A new result of the story replaces its status, and a passed check removes it.
+Switching to another story keeps the status. **Clear all statuses** in the
+testing module removes all Mokapi statuses. Without a new report, a status stays
+when you switch validation off.
+
 ### Error message
 
-In `'error'` mode the story throws an error like this:
+The error message looks like this. Under Vitest a failed story throws it, in
+the Storybook UI its first line is the status line of the panel and the
+description of the sidebar status:
 
 ```
 Mokapi: 1 response does not match the contract.
@@ -344,39 +404,45 @@ panel. Without an invalid response there is no headline.
 
 ### Test with Playwright
 
-Open the story with validation on and check Storybook's error state. Storybook
-adds the class `sb-show-errordisplay` to the body of the preview iframe and
-writes the message into `#error-message` and `#error-stack`:
+The Storybook UI shows no error display for a contract error, so check the
+`storyFinished` event that Storybook sends on its channel. Its payload has
+`status: 'error'` for a failed story, and `reporters` contains the report of type
+`mokapi` with the status `failed`:
 
 ```ts
 import { test, expect } from '@playwright/test';
 
-test('Profile mock matches the contract', async ({ page }) => {
-  await page.goto('http://localhost:6006/iframe.html?id=profile--valid&viewMode=story&globals=mokapiValidation:on');
-  await page.waitForLoadState('networkidle');
-
-  await expect(page.locator('body.sb-show-errordisplay')).toHaveCount(0);
-});
-
 test('a drifted mock fails the story', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__storyFinished = [];
+    let channel;
+    Object.defineProperty(window, '__STORYBOOK_ADDONS_CHANNEL__', {
+      get: () => channel,
+      set(next) {
+        next?.on('storyFinished', (event) => window.__storyFinished.push(event));
+        channel = next;
+      },
+    });
+  });
   await page.goto('http://localhost:6006/iframe.html?id=profile--invalid&viewMode=story&globals=mokapiValidation:on');
 
-  await expect(page.locator('body.sb-show-errordisplay')).toBeVisible();
-  await expect(page.locator('#error-message, #error-stack')).toContainText(
-    'Mokapi: 1 response does not match the contract.',
-  );
+  await expect
+    .poll(() => page.evaluate(() => window.__storyFinished.at(-1)?.status))
+    .toBe('error');
 });
 ```
 
-The first test expects a story whose mock fits the contract, the second one a
-story with an invalid mock under `defaultTest: 'error'`. Adjust the story ids to
-your project. You can also listen to Storybook's `storyFinished` channel event,
-its payload has `status: 'error'` for a failed story.
+The story is a story with an invalid mock under `defaultTest: 'error'`. Adjust
+the story id to your project. For a CI run, `@storybook/addon-vitest` is the
+simpler way, see below.
 
 ### Vitest
 
 With `@storybook/addon-vitest`, a story in `'error'` mode fails its test with the
-Mokapi message, the same text as in the error display. Set
+Mokapi message, see [Error message](#error-message). This applies to **Run
+tests** in the Storybook UI and to `vitest run`. The addon throws only when it
+detects a Vitest browser run, because addon-vitest fails a test only on a thrown
+error and ignores a `failed` report. Set
 `defaultValidation: true` so that the stories are validated, and make sure that
 Mokapi runs with your contract while Vitest runs. Stories in `'todo'` and
 `'off'` pass.
@@ -388,6 +454,9 @@ In Storybook's testing module (**Run tests** below the sidebar), stories in
 `'error'` mode with a failing result are listed as failed and get a red status in
 the sidebar. A `warning` from a story in `'todo'` mode is not shown there: the
 story stays green. Open the **Mokapi** panel to see its contract errors.
+
+The Storybook test-runner (the Playwright based one, not Vitest) doesn't fail on
+contract errors anymore. Use `@storybook/addon-vitest` to fail stories in CI.
 
 ## Docs pages
 
@@ -408,6 +477,9 @@ share one worker, so the addon can't attribute their results to a story. See
 
 The toolbar button is not shown on Docs pages. Switch validation on in story
 view first, or set `defaultValidation: true`.
+
+The story frame on a Docs page shows no contract result, also not for a story in
+`'error'` mode. The story still gets its status in the sidebar, as in story view.
 
 ## Static builds and deployment
 
@@ -507,9 +579,16 @@ validation off, a story without a worker runs without any message.
   configure it.
 - Opaque responses emit no MSW event, so a request that gets one only ends by the
   4 s timeout.
-- In `'error'` mode, `STORY_FINISHED.reporters` is empty for a failed story,
-  because Storybook finishes the story without reports when `afterEach` throws. Use the error
-  display or `status: 'error'`. In `'todo'` mode the report is there.
+- Selecting a Mokapi status in the sidebar works only with `storybook dev`,
+  because Storybook shows the context menu of a story in dev only. The statuses of
+  a static build live in the browser and are gone after a reload. With
+  `storybook dev` they survive a reload and stay until the dev server stops.
+- The addon registers a test provider so that **Clear all statuses** removes the
+  Mokapi statuses. Because of it, the **Run tests** widget shows a row
+  "Mokapi contract validation" in every project that uses the addon. Without
+  `@storybook/addon-vitest`, **Run tests** does nothing for Mokapi.
+- Only `@storybook/addon-vitest` (Vitest browser mode) fails a story on a
+  contract error. The Storybook test-runner doesn't, see [Vitest](#vitest).
 - If a handler throws, MSW answers with its own 500. The addon doesn't validate
   that response.
 - Only responses from MSW handlers are validated, not `passthrough()` or

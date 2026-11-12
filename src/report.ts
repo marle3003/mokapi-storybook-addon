@@ -1,5 +1,6 @@
 import { isTestMode } from './options.js';
-import type { Entry, Notice, PanelState } from './results.js';
+import type { Status } from 'storybook/internal/types';
+import type { Entry, Notice, PanelState, Report, ReportStatus } from './results.js';
 import type { TestMode } from './types.js';
 import type { Operation } from './validation.js';
 
@@ -45,7 +46,7 @@ const FAILING_NOTICES: readonly Notice['kind'][] = ['unreachable', 'endpoint-mis
 const invalidEntries = ({ entries }: PanelState): Entry[] => entries.filter(({ status }) => status === 'invalid');
 const failingNotices = ({ notices }: PanelState): Notice[] => notices.filter(({ kind }) => FAILING_NOTICES.includes(kind));
 
-export function reportStatus(state: PanelState, mode: TestMode): 'passed' | 'warning' | 'failed' {
+export function reportStatus(state: PanelState, mode: TestMode): ReportStatus {
   if (invalidEntries(state).length === 0 && failingNotices(state).length === 0) return 'passed';
   return mode === 'error' ? 'failed' : 'warning';
 }
@@ -61,4 +62,48 @@ export function errorMessage(state: PanelState): string {
   const verb = invalid.length === 1 ? 'response does' : 'responses do';
   const headline = invalid.length === 0 ? [] : [`Mokapi: ${invalid.length} ${verb} not match the contract.`, ''];
   return [...headline, ...invalid.flatMap(describeEntry), ...failingNotices(state).map(({ message }) => message)].join('\n');
+}
+
+// The labels of the entry kinds, in the order the panel counts them.
+export const KIND_LABELS: Record<Entry['status'], string> = {
+  valid: 'valid',
+  invalid: 'invalid',
+  'not-in-contract': 'not in contract',
+  unreachable: 'Mokapi not reachable',
+};
+
+export function countLines(entries: Entry[]): string[] {
+  if (entries.length === 0) return [];
+  const validated = `${entries.length} ${entries.length === 1 ? 'response' : 'responses'} validated`;
+  const kinds = (Object.keys(KIND_LABELS) as Entry['status'][])
+    .map((kind) => ({ kind, count: entries.filter(({ status }) => status === kind).length }))
+    .filter(({ count }) => count > 0)
+    .map(({ kind, count }) => `${count} ${KIND_LABELS[kind]}`);
+  return [validated, ...kinds];
+}
+
+// Storybook's status description and the panel's status line show the headline only, the entries below show the details.
+const headline = (message: string): string => message.split('\n')[0];
+
+const REPORT_TITLES: Record<ReportStatus, string> = { passed: 'Passed', warning: 'Warning', failed: 'Failed' };
+
+// `testMode` is set while validation is on: until the report exists the story is still validating.
+export function statusLine(testMode: TestMode | undefined, report: Report | undefined): string | undefined {
+  if (testMode === undefined || testMode === 'off') return undefined;
+  if (report === undefined) return 'Validating...';
+  return report.status === 'passed' ? REPORT_TITLES.passed : `${REPORT_TITLES[report.status]}: ${headline(report.message)}`;
+}
+
+export const STATUS_TYPE_ID = 'mokapi/validation';
+
+// A passed check has no status, so that a story only shows an icon when there is something to look at.
+export function sidebarStatus(storyId: string, report: Report | undefined): Status | undefined {
+  if (report === undefined || report.status === 'passed') return undefined;
+  return {
+    typeId: STATUS_TYPE_ID,
+    storyId,
+    title: 'Mokapi',
+    value: report.status === 'failed' ? 'status-value:error' : 'status-value:warning',
+    description: headline(report.message),
+  };
 }
