@@ -37,6 +37,8 @@ export interface HookContext {
   globals: Record<string, unknown>;
   parameters: { mokapi?: Omit<MokapiStoryParameters, 'test'> & { test?: unknown } };
   msw?: unknown;
+  /** One per mount: Storybook keeps it for the re-renders of a mount and creates a new one for every mount. */
+  abortSignal?: AbortSignal;
 }
 
 // What Storybook adds to the context for afterEach: the render's abort signal and the reporting API.
@@ -59,6 +61,7 @@ interface InFlight {
   finished: boolean;
 }
 
+// The state of one mount of a story: its panel list, test mode and requests in flight. Re-renders share it.
 interface Render {
   renderId: number;
   api?: string;
@@ -85,6 +88,9 @@ const startedIn = new Map<string, Render>();
 // response is not the project's mock, so it is not validated.
 const thrownRequests = new Set<string>();
 const rendersOfContext = new WeakMap<HookContext, Render>();
+// Results belong to a mount, not to a render: a re-render (globals or args changed) runs the hooks again
+// with a new context but the same abortSignal, and keeps the Render of the mount.
+const rendersOfMount = new WeakMap<AbortSignal, Render>();
 let renderCount = 0;
 let capturedCount = 0;
 const observedWorkers = new WeakSet<object>();
@@ -191,14 +197,23 @@ function observe(worker: MswWorker, options: HookOptions): void {
 }
 
 // Runs before every story render and never throws: it runs for every story of the project.
+// A mount starts a new Render and a new panel list, a re-render continues the Render of its mount.
 export function validationHook(context: HookContext, options: HookOptions): void {
   const { api, disable, test } = context.parameters.mokapi ?? {};
   const validating = context.globals.mokapiValidation === 'on' && !disable;
+  // A switch of the validation re-renders before the addon remounts: that render must not judge the old results.
+  const mounted = context.abortSignal && rendersOfMount.get(context.abortSignal);
+  if (mounted?.validating === validating) {
+    current = mounted;
+    rendersOfContext.set(context, mounted);
+    return;
+  }
   const { mode, invalid } = resolveTestMode(test, options.defaultTest);
   const worker = isWorker(context.msw) ? context.msw : undefined;
   const render = newRender(++renderCount, { api, validating, sending: validating && worker !== undefined, mode });
   current = render;
   rendersOfContext.set(context, render);
+  if (context.abortSignal) rendersOfMount.set(context.abortSignal, render);
   const emit = (action: PanelAction) => announce(render, options.emit, action);
 
   if (validating || worker !== undefined) {

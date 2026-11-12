@@ -213,9 +213,11 @@ The addon sends nothing to Mokapi for this story, also when the toggle is on.
 
 ## Panel and badge
 
-The **Mokapi** panel shows the responses of the selected story since its last
-render. Switching to another story or rendering the story again clears the
-list. Each entry shows the method, URL, HTTP status of the response and time,
+The **Mokapi** panel shows the responses of the selected story since it was
+mounted. A re-render that keeps the component, for example a change in Controls
+or in a toolbar, keeps the list and adds the responses of the new requests.
+Switching to another story, **Reload Story** and switching validation start a
+new list. Each entry shows the method, URL, HTTP status of the response and time,
 and one of these results:
 
 | Result                 | Meaning                                                                          |

@@ -774,6 +774,24 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await entries(page, 'invalid').count(), 1);
     });
 
+    await scenario('a re-render after another global changed keeps the invalid result and the failing story', async (page) => {
+      // `theme` is a second global of the fixture that no story uses. Changing it re-renders the story without remounting it.
+      await page.goto(`${storybook.url}/?path=/story/profile--error-invalid&globals=mokapiValidation:on;theme:light`);
+      await toggleButton(page, 'on').waitFor();
+      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await openMokapiPanel(page);
+      await entries(page, 'invalid').waitFor();
+
+      const preview = page.frame({ name: 'storybook-preview-iframe' });
+      const finished = await preview.evaluate(() => window.__storyFinished.length);
+      await page.evaluate(() => window.__STORYBOOK_ADDONS_CHANNEL__.emit('updateGlobals', { globals: { theme: 'dark' } }));
+      await preview.waitForFunction((count) => window.__storyFinished.length > count, finished);
+
+      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      assert.equal(await entries(page, 'invalid').count(), 1);
+      assert.equal(await page.getByText(/No responses validated/).count(), 0);
+    });
+
     await scenario('on a Docs page a story with test error shows the error in its frame', async (page) => {
       await openStory(page, validatingStorybook.url, { id: 'docs-test-mode--docs', docs: true });
       const story = previewFrame(page).frameLocator('#iframe--docs-test-mode--error-invalid').first();

@@ -758,6 +758,146 @@ test('the report holds only the entries and notices of its own render', async (t
   assert.deepEqual(second.reports[0].result.notices, []);
 });
 
+// Storybook runs beforeEach and afterEach again when globals or args change: a new context object, but the same
+// StoryRender and so the same abortSignal. A mount (first render, story change, remount) gets a new signal.
+const rerenderOf = (mounted, worker, options) => ({ ...testContext(worker, options), abortSignal: mounted.abortSignal });
+
+test('a re-render of the mounted story keeps the entries of the mount in the panel', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker);
+  validationHook(mounted, hookOptions(panel));
+  worker.started(getProfile(), 'mount');
+  const result = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'mount');
+  await result;
+
+  validationHook(rerenderOf(mounted, worker), hookOptions(panel));
+
+  const shown = panel.actions.reduce(reducePanel, initialPanelState);
+  assert.deepEqual(shown.entries.map(({ status, url }) => [status, url]), [['invalid', '/api/profile?id=1']]);
+});
+
+test('a re-render of the mounted story appends the entries of its own requests to those of the mount', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker);
+  validationHook(mounted, hookOptions(panel));
+  worker.started(getProfile(), 'mount');
+  let result = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'mount');
+  await result;
+
+  validationHook(rerenderOf(mounted, worker), hookOptions(panel));
+  worker.started(requestTo('/api/orders'), 'rerender');
+  result = panel.next();
+  worker.mocked(requestTo('/api/orders'), jsonResponse(), 'rerender');
+  await result;
+
+  const shown = panel.actions.reduce(reducePanel, initialPanelState);
+  assert.deepEqual(shown.entries.map(({ url }) => url), ['/api/profile?id=1', '/api/orders']);
+});
+
+test('afterEach of a re-render in error mode fails on the invalid entry of the mount', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker, failingMode);
+  validationHook(mounted, hookOptions(panel));
+  worker.started(getProfile(), 'mount');
+  const finishedMount = testHook(mounted, hookOptions(panel));
+  worker.mocked(getProfile(), jsonResponse(), 'mount');
+  await assert.rejects(finishedMount, /^Error: Mokapi: 1 response does not match the contract\./);
+
+  const rerender = rerenderOf(mounted, worker, failingMode);
+  validationHook(rerender, hookOptions(panel));
+  await assert.rejects(testHook(rerender, hookOptions(panel)), /^Error: Mokapi: 1 response does not match the contract\./);
+  assert.equal(rerender.reports[0].status, 'failed');
+});
+
+test('a re-render that switches validation off does not judge the results of the mount', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker, failingMode);
+  validationHook(mounted, hookOptions(panel));
+  worker.started(getProfile(), 'mount');
+  const result = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'mount');
+  await result;
+
+  const rerender = rerenderOf(mounted, worker, { ...failingMode, validation: 'off' });
+  validationHook(rerender, hookOptions(panel));
+
+  assert.equal(await testHook(rerender, hookOptions(panel)), undefined);
+  assert.deepEqual(rerender.reports, []);
+});
+
+test('a re-render that switches validation on starts a new list like a mount', async () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker, { validation: 'off' });
+  validationHook(mounted, hookOptions(panel));
+  const before = panel.actions.length;
+
+  validationHook(rerenderOf(mounted, worker, { validation: 'on' }), hookOptions(panel));
+
+  assert.deepEqual(panel.actions.slice(before).map(({ type }) => type), ['render-started']);
+});
+
+test('a remount of the story has a new abortSignal and starts a new list', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker);
+  validationHook(mounted, hookOptions(panel));
+  worker.started(getProfile(), 'first');
+  let result = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'first');
+  await result;
+
+  validationHook(testContext(worker), hookOptions(panel));
+  worker.started(requestTo('/api/orders'), 'second');
+  result = panel.next();
+  worker.mocked(requestTo('/api/orders'), jsonResponse(), 'second');
+  await result;
+
+  const shown = panel.actions.reduce(reducePanel, initialPanelState);
+  assert.deepEqual(shown.entries.map(({ url }) => url), ['/api/orders']);
+});
+
+test('a context without abortSignal is a mount, so every render of it starts a new list', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), hookOptions(panel));
+  worker.started(getProfile(), 'first');
+  const result = panel.next();
+  worker.mocked(getProfile(), jsonResponse(), 'first');
+  await result;
+
+  validationHook(storyContext(worker), hookOptions(panel));
+
+  assert.deepEqual(panel.actions.reduce(reducePanel, initialPanelState).entries, []);
+});
+
+test('the answer for a request of the previous mount does not reach the list of the new mount', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(testContext(worker), hookOptions(panel));
+  worker.started(getProfile(), 'old');
+  validationHook(testContext(worker), hookOptions(panel));
+  worker.mocked(getProfile(), jsonResponse(), 'old');
+  await settled();
+  await settled();
+
+  const shown = panel.actions.reduce(reducePanel, initialPanelState);
+  assert.deepEqual(shown.entries, []);
+});
+
 test('an invalid test parameter is a configuration error and the story uses defaultTest', async () => {
   const panel = recorder();
   const worker = fakeWorker();

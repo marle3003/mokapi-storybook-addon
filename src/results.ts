@@ -25,7 +25,7 @@ export interface Notice {
   message: string;
 }
 
-// renderId is unique per story render, so late answers of an earlier render can be recognized.
+// renderId is unique per mount of a story (a re-render keeps it), so late answers of an earlier mount can be recognized.
 // testMode is set while the render is validated.
 export type PanelAction =
   | { type: 'render-started'; storyId: string; renderId: number; testMode?: TestMode }
