@@ -308,6 +308,7 @@ const responseBadge = (entry) => entryDetails(entry).getByTestId('mokapi-status-
 const entryMethodBadge = (entry) => entry.getByTestId('mokapi-method-badge').first();
 const requestBadge = (entry) => entryDetails(entry).getByTestId('mokapi-method-badge');
 const fontFamilyOf = (locator) => locator.evaluate((element) => getComputedStyle(element).fontFamily);
+const backgroundColorOf = (locator) => locator.evaluate((element) => getComputedStyle(element).backgroundColor);
 const entryTime = (entry) => entry.getByTestId('mokapi-entry-time');
 const EMPTY_LIST_TEXT = 'No responses validated since this story was mounted.';
 
@@ -418,8 +419,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     };
 
     // Each scenario runs in a fresh browser context, so that no state leaks between them.
-    const scenario = (name, run) => t.test(name, async () => {
-      const context = await browser.newContext({ viewport: { width: 1280, height: 1600 }, locale: 'en-US' });
+    const scenario = (name, run, contextOptions = {}) => t.test(name, async () => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 1600 }, locale: 'en-US', ...contextOptions });
       await recordFinishedStories(context);
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
@@ -835,11 +836,11 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await methodBadge.textContent(), 'GET');
       assert.equal(await methodBadge.getAttribute('aria-label'), null);
       // theme.color.secondary of the light theme
-      assert.equal(await methodBadge.evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(0, 109, 235)');
+      assert.equal(await backgroundColorOf(methodBadge), 'rgb(0, 109, 235)');
       const badge = entryBadge(invalid);
       assert.equal(await badge.textContent(), '200');
       assert.equal(await badge.getAttribute('aria-label'), '200 OK');
-      assert.equal(await badge.evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(102, 191, 60)');
+      assert.equal(await backgroundColorOf(badge), 'rgb(102, 191, 60)');
       await assertBadgeTooltip(badge, 'OK');
       // The badges set their own font, they don't inherit the mono font of the URL.
       assert.match(await fontFamilyOf(methodBadge), /^"?Nunito Sans/);
@@ -849,7 +850,21 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.doesNotMatch(text, /\b(AM|PM)\b/);
       assert.ok(await invalid.getByText(/required properties are missing: email/).isVisible());
       assert.equal(await invalid.getByText('(empty)').isVisible(), false);
+      // theme.background.warning of the light theme
+      assert.equal(await backgroundColorOf(invalid), 'rgb(255, 249, 235)');
     });
+
+    await scenario('the method badge, the status badge and the invalid row follow the dark manager theme', async (page) => {
+      await openValidated(page, 'profile--invalid');
+      const invalid = entries(page, 'invalid');
+      await invalid.waitFor();
+      // theme.color.secondary of the dark theme
+      assert.equal(await backgroundColorOf(entryMethodBadge(invalid)), 'rgb(71, 157, 255)');
+      // theme.color.positive of the dark theme
+      assert.equal(await backgroundColorOf(entryBadge(invalid)), 'rgb(102, 191, 60)');
+      // the dark fallback of the invalid row in src/manager.tsx
+      assert.equal(await backgroundColorOf(invalid), 'rgba(255, 68, 0, 0.07)');
+    }, { colorScheme: 'dark' });
 
     await scenario('Request and Response are collapsed and show headers and pretty-printed bodies when expanded', async (page) => {
       await openValidated(page, 'profile--valid');
@@ -857,8 +872,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await valid.waitFor();
       assert.equal(await entryDetails(valid).getAttribute('open'), null);
       await toggleDetails(valid);
-      const get = await entryDetails(valid).textContent();
       await entryDetails(valid).locator('strong', { hasText: /^Request$/ }).waitFor();
+      const get = await entryDetails(valid).textContent();
       assert.equal(await requestBadge(valid).textContent(), 'GET');
       assert.match(get, /\(empty\)/);
       assert.match(get, /content-type: application\/json/);
