@@ -286,22 +286,33 @@ shows only a hint how to turn it on, without toolbar.
 
 ### Entries
 
-Each entry is a row with an icon, the result, the method and URL of the request,
-and the HTTP status of the response and the time on the right. The result is one
-of these:
+Each entry is a row with an icon, the result, the method of the request as a
+badge, the URL of the request, and the HTTP status of the response and the time
+on the right. The result is one of these:
 
 | Result                 | Icon | Meaning                                                                          |
 |------------------------|------|----------------------------------------------------------------------------------|
-| valid                  | check mark | Request and response fit the contract. The request links to the matched operation |
+| valid                  | check mark | Request and response fit the contract. The URL links to the matched operation |
 | invalid                | red stop sign | The contract is violated. The row has a red background and lists each error with its `location` (for example `response.body`) and message below it |
 | not in contract        | empty circle | Mokapi found no operation for the request, or several APIs match. The entry shows Mokapi's message |
 | Mokapi not reachable   | empty circle | The request to Mokapi failed. The entry shows the URL and a hint to `dashboardUrl` |
 
-In valid and invalid entries, the request (for example `GET /api/profile/1`)
-links to the page of the operation Mokapi matched in the Mokapi dashboard and
-opens in a new tab. Hover the link to see the operation, for example
-`GET /profile/{id}`. Entries that are not in the contract or not reachable have
-no link.
+In valid and invalid entries, the URL of the request (for example
+`/api/profile/1`) links to the page of the operation Mokapi matched in the Mokapi
+dashboard and opens in a new tab. The method badge in front of it is not part of
+the link. Hover the link to see the operation, for example `GET /profile/{id}`.
+Entries that are not in the contract or not reachable have no link.
+
+The method is a badge with the method in upper case, colored by method:
+
+| Method        | Color  |
+|---------------|--------|
+| GET, OPTIONS  | blue   |
+| POST          | green  |
+| PUT, PATCH    | orange |
+| DELETE        | red    |
+| HEAD, TRACE   | gold   |
+| other         | gray   |
 
 The status is a badge with the status code, colored by its class:
 
@@ -316,14 +327,15 @@ The status is a badge with the status code, colored by its class:
 Hover the badge to see the status text, for example `Not Found` for 404. A code
 without a known text shows its class instead: Informational, Success, Redirect,
 Client error or Server error. For a code outside 100-599 (for example `0` for
-`HttpResponse.error()`), the tooltip shows only the code. The time is
-`HH:mm:ss` in the time zone of your browser.
+`HttpResponse.error()`), the tooltip shows only the code. A method and a status
+can have the same color, for example `GET` and a 3xx status are both blue. The
+time is `HH:mm:ss` in the time zone of your browser.
 
-Under each entry, **Request / Response** is collapsed, and its **Response**
-heading shows the same badge. Open it to see the
-headers and the body of the request and of the response as the addon sent them
-to Mokapi. A JSON body is pretty-printed, and an empty body shows `(empty)`. The
-panel shows at most 10,000 characters of a body and adds
+Under each entry, **Request / Response** is collapsed. Its **Request** heading
+shows the method badge and its **Response** heading shows the status badge. Open
+it to see the headers and the body of the request and of the response as the
+addon sent them to Mokapi. A JSON body is pretty-printed, and an empty body
+shows `(empty)`. The panel shows at most 10,000 characters of a body and adds
 `(truncated to 10,000 characters)` if it cut one. Mokapi always gets the full
 body.
 

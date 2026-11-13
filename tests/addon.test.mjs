@@ -14,6 +14,7 @@ import {
   errorMessage,
   formatBody,
   formatTime,
+  methodColor,
   operationUrl,
   reportBadge,
   reportHeadline,
@@ -614,6 +615,24 @@ test('status label joins the code and its text, the bare code stays without one'
   assert.equal(statusLabel(299), '299 Success');
   assert.equal(statusLabel(0), '0');
   assert.equal(statusLabel(600), '600');
+});
+
+test('method color follows the dashboard: GET and OPTIONS blue, POST green, PUT and PATCH orange, DELETE red, HEAD and TRACE gold', () => {
+  const colors = {
+    GET: 'secondary', OPTIONS: 'secondary', POST: 'positive', PUT: 'warning', PATCH: 'warning',
+    DELETE: 'negative', HEAD: 'gold', TRACE: 'gold',
+  };
+  for (const [method, color] of Object.entries(colors)) assert.equal(methodColor(method), color, method);
+});
+
+test('method color ignores the case, because fetch keeps patch in lower case', () => {
+  assert.equal(methodColor('get'), 'secondary');
+  assert.equal(methodColor('patch'), 'warning');
+  assert.equal(methodColor('Delete'), 'negative');
+});
+
+test('an unknown method is gray, also an empty one and a prototype key', () => {
+  for (const method of ['PROPFIND', '', 'constructor']) assert.equal(methodColor(method), 'mediumdark', method);
 });
 
 test('time is formatted as HH:mm:ss in local time, whatever the locale', () => {

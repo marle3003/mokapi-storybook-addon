@@ -14,6 +14,7 @@ import {
   formatBody,
   formatTime,
   KIND_LABELS,
+  methodColor,
   reportBadge,
   reportHeadline,
   sidebarStatus,
@@ -108,8 +109,15 @@ const StatusBadge = styled.span<{ status: BadgeColor }>(({ theme, status }) => (
   minWidth: 65,
   textAlign: 'center',
 }));
-// Three digits next to the 12 px row text: same color, radius and weight, but no button look.
-const CodeBadge = styled(StatusBadge)({ textTransform: 'none', letterSpacing: 0, minWidth: 0, padding: '1px 6px' });
+// A code or method next to the 12 px row text: same color, radius and weight, but no button look.
+// The base font, because the badge sits in the mono font of `EntryUrl`.
+const CodeBadge = styled(StatusBadge)(({ theme }) => ({
+  textTransform: 'none',
+  letterSpacing: 0,
+  minWidth: 0,
+  padding: '1px 6px',
+  fontFamily: theme.typography.fonts.base,
+}));
 const ToolbarRow = styled.div(({ theme }) => ({
   display: 'flex',
   flexWrap: 'wrap',
@@ -193,6 +201,10 @@ function HttpStatusBadge({ statusCode }: { statusCode: number }) {
   );
 }
 
+function MethodBadge({ method }: { method: string }) {
+  return <CodeBadge status={methodColor(method)} data-testid="mokapi-method-badge">{method.toUpperCase()}</CodeBadge>;
+}
+
 function Message({ title, summary, details }: { title: string; summary: ReactNode; details?: MessageDetails }) {
   if (!details) return null;
   return (
@@ -208,13 +220,14 @@ function Message({ title, summary, details }: { title: string; summary: ReactNod
 }
 
 function EntryItem({ entry }: { entry: Entry }) {
-  const request = `${entry.method} ${entry.url}`;
   return (
     <EntryRow status={entry.status} data-testid="mokapi-entry" data-status={entry.status}>
       <EntryHeader>
         <EntryIcon status={entry.status} />
         <EntryKind status={entry.status}>{KIND_LABELS[entry.status]}</EntryKind>
         <EntryUrl>
+          <MethodBadge method={entry.method} />
+          {' '}
           {entry.operation && entry.operationUrl ? (
             <Link
               href={entry.operationUrl}
@@ -223,9 +236,9 @@ function EntryItem({ entry }: { entry: Entry }) {
               title={`${entry.operation.method} ${entry.operation.path}`}
               data-testid="mokapi-operation"
             >
-              {request}
+              {entry.url}
             </Link>
-          ) : request}
+          ) : entry.url}
         </EntryUrl>
         <EntryMeta data-testid="mokapi-entry-meta">
           <HttpStatusBadge statusCode={entry.statusCode} />
@@ -243,7 +256,7 @@ function EntryItem({ entry }: { entry: Entry }) {
       {(entry.request || entry.response) && (
         <Details data-testid="mokapi-details">
           <Summary>Request / Response</Summary>
-          <Message title="Request" summary={request} details={entry.request} />
+          <Message title="Request" summary={<MethodBadge method={entry.method} />} details={entry.request} />
           <Message title="Response" summary={<HttpStatusBadge statusCode={entry.statusCode} />} details={entry.response} />
         </Details>
       )}

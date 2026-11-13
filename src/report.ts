@@ -107,9 +107,10 @@ export function reportBadge(testMode: TestMode | undefined, report: Report | und
   return report === undefined ? { label: 'WAIT', status: 'mediumdark' } : REPORT_BADGES[report.status];
 }
 
-// The names are Storybook's theme colors. The groups are the ones of the dashboard's `getClassByStatusCode`.
-export type BadgeColor = 'positive' | 'secondary' | 'warning' | 'negative' | 'mediumdark';
+// The names are Storybook's theme colors, used by the status and the method badge.
+export type BadgeColor = 'positive' | 'secondary' | 'warning' | 'negative' | 'mediumdark' | 'gold';
 
+// The status groups are the ones of the dashboard's `getClassByStatusCode`.
 // Keyed by the hundreds digit of the status code.
 const STATUS_GROUPS: Record<number, { name: string; color: BadgeColor }> = {
   1: { name: 'Informational', color: 'mediumdark' },
@@ -140,6 +141,18 @@ const STATUS_TEXTS: Record<number, string> = {
 const statusGroup = (code: number) => Number.isInteger(code) ? STATUS_GROUPS[Math.floor(code / 100)] : undefined;
 
 export const statusColor = (code: number): BadgeColor => statusGroup(code)?.color ?? 'mediumdark';
+
+// The colors of the dashboard's method badges (`http.css`). A `Map`, so `constructor` doesn't find a property of `Object`.
+const METHOD_COLORS = new Map<string, BadgeColor>([
+  ['GET', 'secondary'], ['OPTIONS', 'secondary'],
+  ['POST', 'positive'],
+  ['PUT', 'warning'], ['PATCH', 'warning'],
+  ['DELETE', 'negative'],
+  ['HEAD', 'gold'], ['TRACE', 'gold'],
+]);
+
+// `fetch` keeps the case of a method it doesn't normalize (`patch`).
+export const methodColor = (method: string): BadgeColor => METHOD_COLORS.get(method.toUpperCase()) ?? 'mediumdark';
 
 export const statusText = (code: number): string | undefined => STATUS_TEXTS[code] ?? statusGroup(code)?.name;
 

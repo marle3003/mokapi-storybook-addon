@@ -304,6 +304,10 @@ const toggleDetails = (entry) => entryDetails(entry).locator('summary').click();
 // The badge exists twice per row, in the row's meta and in the heading of the response details.
 const entryBadge = (entry) => entry.getByTestId('mokapi-entry-meta').getByTestId('mokapi-status-badge');
 const responseBadge = (entry) => entryDetails(entry).getByTestId('mokapi-status-badge');
+// The method badge exists twice per entry too. The row's badge comes first in the DOM, the details follow it.
+const entryMethodBadge = (entry) => entry.getByTestId('mokapi-method-badge').first();
+const requestBadge = (entry) => entryDetails(entry).getByTestId('mokapi-method-badge');
+const fontFamilyOf = (locator) => locator.evaluate((element) => getComputedStyle(element).fontFamily);
 const entryTime = (entry) => entry.getByTestId('mokapi-entry-time');
 const EMPTY_LIST_TEXT = 'No responses validated since this story was mounted.';
 
@@ -675,14 +679,16 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await openValidated(page, 'profile--valid');
       const link = operationLink(page, 'valid');
       await link.waitFor();
-      assert.equal(await link.textContent(), 'GET /api/profile');
+      assert.equal(await link.textContent(), '/api/profile');
       assert.equal(await link.getAttribute('title'), 'GET /api/profile');
+      assert.equal(await link.getByTestId('mokapi-method-badge').count(), 0);
+      assert.equal(await entryMethodBadge(entries(page, 'valid')).textContent(), 'GET');
       assert.equal(await link.getAttribute('href'), dashboardOperationUrl(dashboard, 'Profile%20API/api/profile/get'));
       assert.equal(await link.getAttribute('target'), '_blank');
       assert.equal(await link.getAttribute('rel'), 'noreferrer');
 
       await openValidated(page, 'profile--invalid');
-      assert.equal(await operationLink(page, 'invalid').textContent(), 'GET /api/profile');
+      assert.equal(await operationLink(page, 'invalid').textContent(), '/api/profile');
       assert.equal(await operationLink(page, 'invalid').getAttribute('title'), 'GET /api/profile');
       assert.equal(
         await operationLink(page, 'invalid').getAttribute('href'),
@@ -690,12 +696,14 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       );
     });
 
-    await scenario('the operation link shows the request, titles the path template and encodes its braces', async (page) => {
+    await scenario('the operation link shows the URL, titles the path template and encodes its braces', async (page) => {
       await openValidated(page, 'profile--path-pattern');
       const link = operationLink(page, 'valid');
       await link.waitFor();
-      assert.equal(await link.textContent(), 'GET /api/users/42');
+      assert.equal(await link.textContent(), '/api/users/42');
       assert.equal(await link.getAttribute('title'), 'GET /api/users/{id}');
+      assert.equal(await link.getByTestId('mokapi-method-badge').count(), 0);
+      assert.equal(await entryMethodBadge(entries(page, 'valid')).textContent(), 'GET');
       assert.equal(await link.getAttribute('href'), dashboardOperationUrl(dashboard, 'Profile%20API/api/users/%7Bid%7D/get'));
     });
 
@@ -816,18 +824,26 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await eventually(async () => assert.equal(await rerunButton(page).isDisabled({ timeout: 1000 }), false));
     });
 
-    await scenario('an entry row shows kind, method and URL, status badge and time, and the errors without expanding', async (page) => {
+    await scenario('an entry row shows kind, method badge, URL, status badge and time, and the errors without expanding', async (page) => {
       await openValidated(page, 'profile--invalid');
       const invalid = entries(page, 'invalid');
       await invalid.waitFor();
       const text = await invalid.textContent();
       assert.match(text, /invalid/);
       assert.match(text, /GET \/api\/profile/);
+      const methodBadge = entryMethodBadge(invalid);
+      assert.equal(await methodBadge.textContent(), 'GET');
+      assert.equal(await methodBadge.getAttribute('aria-label'), null);
+      // theme.color.secondary of the light theme
+      assert.equal(await methodBadge.evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(0, 109, 235)');
       const badge = entryBadge(invalid);
       assert.equal(await badge.textContent(), '200');
       assert.equal(await badge.getAttribute('aria-label'), '200 OK');
       assert.equal(await badge.evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(102, 191, 60)');
       await assertBadgeTooltip(badge, 'OK');
+      // The badges set their own font, they don't inherit the mono font of the URL.
+      assert.match(await fontFamilyOf(methodBadge), /^"?Nunito Sans/);
+      assert.match(await fontFamilyOf(badge), /^"?Nunito Sans/);
       // The English locale would show AM or PM without the fixed format.
       assert.match(await entryTime(invalid).textContent(), /^\d{2}:\d{2}:\d{2}$/);
       assert.doesNotMatch(text, /\b(AM|PM)\b/);
@@ -842,7 +858,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await entryDetails(valid).getAttribute('open'), null);
       await toggleDetails(valid);
       const get = await entryDetails(valid).textContent();
-      assert.match(get, /GET \/api\/profile/);
+      await entryDetails(valid).locator('strong', { hasText: /^Request$/ }).waitFor();
+      assert.equal(await requestBadge(valid).textContent(), 'GET');
       assert.match(get, /\(empty\)/);
       assert.match(get, /content-type: application\/json/);
       assert.match(get, /\{\s*\n\s+"name": "Jane Doe"/);
@@ -852,13 +869,15 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await heading.textContent(), '200');
       assert.equal(await heading.getAttribute('aria-label'), '200 OK');
       await assertBadgeTooltip(heading, 'OK');
+      assert.match(await fontFamilyOf(requestBadge(valid)), /^"?Nunito Sans/);
+      assert.match(await fontFamilyOf(heading), /^"?Nunito Sans/);
 
       await openValidated(page, 'profile--post-valid');
       const post = entries(page, 'valid');
       await post.waitFor();
       await toggleDetails(post);
       const posted = await entryDetails(post).textContent();
-      assert.match(posted, /POST \/api\/profile/);
+      assert.equal(await requestBadge(post).textContent(), 'POST');
       assert.match(posted, /content-type: application\/json/);
       assert.match(posted, /\{\s*\n\s+"name": "Jane Doe",\s*\n\s+"email": "jane@example.com"/);
       assert.doesNotMatch(posted, /\(empty\)/);
