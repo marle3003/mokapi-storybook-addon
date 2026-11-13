@@ -7,11 +7,12 @@ import {
   reportStatus,
   resolveTestMode,
   timeoutMessage,
+  truncateBody,
   VALIDATION_TIMEOUT_MS,
 } from './report.js';
-import { initialPanelState, reducePanel, type Entry, type PanelAction, type PanelState } from './results.js';
+import { initialPanelState, reducePanel, type Entry, type MessageDetails, type PanelAction, type PanelState } from './results.js';
 import type { MokapiStoryParameters, TestMode } from './types.js';
-import { classify, sendValidation, serializePair, type ValidationOutcome } from './validation.js';
+import { classify, sendValidation, serializePair, type ValidationOutcome, type ValidationPayload } from './validation.js';
 
 const WORKER_MISSING = 'MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.';
 
@@ -164,6 +165,9 @@ function toPanelActions(
   return [{ type: 'result', renderId, entry }, notice];
 }
 
+// The panel shows the pair as sent to Mokapi, with the bodies cut: Mokapi gets the full payload.
+const detailsOf = ({ headers, body }: Pick<ValidationPayload['request'], 'headers' | 'body'>): MessageDetails => ({ headers, ...truncateBody(body) });
+
 function validate({ request, response, requestId }: MockedResponse, { emit, dashboardUrl }: HookOptions): void {
   if (thrownRequests.delete(requestId)) return;
   const render = startedIn.get(requestId) ?? current;
@@ -182,6 +186,8 @@ function validate({ request, response, requestId }: MockedResponse, { emit, dash
       method: payload.request.method,
       url: payload.request.url,
       statusCode: payload.response.statusCode,
+      request: detailsOf(payload.request),
+      response: detailsOf(payload.response),
     }, dashboardUrl).forEach((action) => announce(render, emit, action));
   }).finally(() => inFlight?.finish());
 }

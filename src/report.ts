@@ -72,26 +72,54 @@ export const KIND_LABELS: Record<Entry['status'], string> = {
   unreachable: 'Mokapi not reachable',
 };
 
-export function countLines(entries: Entry[]): string[] {
-  if (entries.length === 0) return [];
+export function countLine(entries: Entry[]): string | undefined {
+  if (entries.length === 0) return undefined;
   const validated = `${entries.length} ${entries.length === 1 ? 'response' : 'responses'} validated`;
   const kinds = (Object.keys(KIND_LABELS) as Entry['status'][])
     .map((kind) => ({ kind, count: entries.filter(({ status }) => status === kind).length }))
     .filter(({ count }) => count > 0)
     .map(({ kind, count }) => `${count} ${KIND_LABELS[kind]}`);
-  return [validated, ...kinds];
+  return [validated, ...kinds].join(', ');
 }
 
-// Storybook's status description and the panel's status line show the headline only, the entries below show the details.
+// The headline is the first line of the message; the entries below show the details. Storybook's status description and the panel use it.
 const headline = (message: string): string => message.split('\n')[0];
 
-const REPORT_TITLES: Record<ReportStatus, string> = { passed: 'Passed', warning: 'Warning', failed: 'Failed' };
+// A passed report has nothing to say beyond its badge.
+export const reportHeadline = (report: Report | undefined): string | undefined =>
+  report === undefined || report.status === 'passed' ? undefined : headline(report.message);
+
+// The names are Storybook's theme colors, as the Interactions panel's status badge uses them.
+export interface ReportBadge {
+  label: 'PASS' | 'WARN' | 'FAIL' | 'WAIT';
+  status: 'positive' | 'warning' | 'negative' | 'mediumdark';
+}
+
+const REPORT_BADGES: Record<ReportStatus, ReportBadge> = {
+  passed: { label: 'PASS', status: 'positive' },
+  warning: { label: 'WARN', status: 'warning' },
+  failed: { label: 'FAIL', status: 'negative' },
+};
 
 // `testMode` is set while validation is on: until the report exists the story is still validating.
-export function statusLine(testMode: TestMode | undefined, report: Report | undefined): string | undefined {
+export function reportBadge(testMode: TestMode | undefined, report: Report | undefined): ReportBadge | undefined {
   if (testMode === undefined || testMode === 'off') return undefined;
-  if (report === undefined) return 'Validating...';
-  return report.status === 'passed' ? REPORT_TITLES.passed : `${REPORT_TITLES[report.status]}: ${headline(report.message)}`;
+  return report === undefined ? { label: 'WAIT', status: 'mediumdark' } : REPORT_BADGES[report.status];
+}
+
+// The panel shows at most this many characters of a body; Mokapi gets the whole body.
+export const BODY_LIMIT = 10_000;
+
+export const truncateBody = (text: string): { body: string; truncated: boolean } =>
+  ({ body: text.slice(0, BODY_LIMIT), truncated: text.length > BODY_LIMIT });
+
+export function formatBody(text: string): string {
+  if (text === '') return '(empty)';
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 export const STATUS_TYPE_ID = 'mokapi/validation';

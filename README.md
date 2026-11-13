@@ -217,70 +217,62 @@ The **Mokapi** panel shows the responses of the selected story since it was
 mounted. A re-render that keeps the component, for example a change in Controls
 or in a toolbar, keeps the list and adds the responses of the new requests.
 Switching to another story, **Reload Story** and switching validation start a
-new list. Each entry shows the method, URL, HTTP status of the response and time,
-and one of these results:
-
-| Result                 | Meaning                                                                          |
-|------------------------|----------------------------------------------------------------------------------|
-| valid                  | Request and response fit the contract. The request links to the matched operation |
-| invalid                | The contract is violated. The entry lists each error with its `location` (for example `response.body`) and message |
-| not in contract        | Mokapi found no operation for the request, or several APIs match. The entry shows Mokapi's message |
-| Mokapi not reachable   | The request to Mokapi failed. The entry shows the URL and a hint to `dashboardUrl` |
-
-In valid and invalid entries, the request (for example `GET /api/profile/1`)
-links to the page of the operation Mokapi matched in the Mokapi dashboard and
-opens in a new tab. Hover the link to see the operation, for example
-`GET /profile/{id}`. Entries that are not in the contract or not reachable have
-no link.
+new list. Until the first response arrives, the panel shows
+`No responses validated since this story was mounted.`
 
 The tab title shows a badge with the number of invalid responses. Responses that
 are not in the contract and not-reachable entries are not counted.
 
-While validation is on, the panel starts with the report header **Mokapi
-Contract Validation**. Below it come a status line and the counts:
+### Toolbar
 
-```text
-Mokapi Contract Validation
-Failed: Mokapi: 1 response does not match the contract.
+While validation is on, the panel starts with a toolbar. From left to right it
+has:
 
-2 responses validated
-1 valid
-1 invalid
-```
+- A report badge: `PASS`, `WARN`, `FAIL` or `WAIT`. Hover it to see the test mode
+  of the story. See the table below.
+- A headline in bold, only for `WARN` and `FAIL`: the first line of the
+  [error message](#error-message), for example
+  `Mokapi: 1 response does not match the contract.`
+- The counts in one line, for example
+  `2 responses validated, 1 valid, 1 invalid`. The line counts all entries since
+  the story was mounted and updates as results come in. Kinds that don't occur
+  are left out (`valid`, `invalid`, `not in contract`, `Mokapi not reachable`).
+- The **Rerun** icon button and a link to the Mokapi dashboard, on the right.
 
-The status line depends on the test mode of the story, see
+The badge depends on the test mode of the story, see
 [Failing stories](#failing-stories):
 
-| Status line | When |
-|-------------|------|
-| `Validating...` | The story is still waiting for its requests and their validation |
-| `Failed: <message>` | Test mode `'error'` and a failing result. `<message>` is the first line of the [error message](#error-message) |
-| `Warning: <message>` | Test mode `'todo'` and a failing result, with the same first line |
-| `Passed` | No failing result |
+| Badge  | When |
+|--------|------|
+| `WAIT` | The story is still waiting for its requests and their validation |
+| `FAIL` | Test mode `'error'` and a failing result |
+| `WARN` | Test mode `'todo'` and a failing result |
+| `PASS` | No failing result |
 
-In test mode `'off'` there is no status line. If a story is aborted before it
-reports, for example because you switch stories, the line stays at
-`Validating...` until the story is mounted again. The details of a failed or
-warning report are in the entries and notices below the counts.
+In test mode `'off'` and for a story with `parameters.mokapi.disable` there is no
+badge. If a story is aborted before it reports, for example because you switch
+stories, the badge stays at `WAIT` until the story is mounted again. The details
+of a `FAIL` or `WARN` are in the entries and notices below the toolbar.
 
-The counts update as the results come in. `N responses validated` counts all
-entries since the story was mounted. One line per kind follows (`valid`,
-`invalid`, `not in contract`, `Mokapi not reachable`), and kinds that don't
-occur are left out.
-
-While validation is on, the panel also shows the test mode of the selected
-story, so you can see what a CI run does with it, see
-[Failing stories](#failing-stories):
+The tooltip of the badge shows the test mode, so you can see what a CI run does
+with the story, see [Failing stories](#failing-stories):
 
 - `Test mode: error. Contract errors make this story fail.`
 - `Test mode: todo. Contract errors are reported as warnings, the story stays green.`
-- `Test mode: off. Contract errors are shown here only.`
 
-The panel doesn't show a mode when validation is off or the story sets
-`parameters.mokapi.disable`. You can't change the mode in the panel, it is set in
-code only.
+In test mode `'off'` there is no badge to hover. The toolbar shows
+`Test mode: off. Contract errors are shown here only.` as text instead. You can't
+change the mode in the panel, it is set in code only.
 
-Notices appear at the top of the panel when the addon can't validate:
+**Rerun** remounts the story, like switching validation does. The component
+requests its data again, the list starts empty and the story gets a new report.
+The preview is not reloaded. The button is disabled while the story renders,
+because remounting a story that is still pending makes Storybook reload the
+preview.
+
+### Notices
+
+Notices appear below the toolbar when the addon can't validate:
 
 - Mokapi is not reachable.
 - The Mokapi at `dashboardUrl` has no validation endpoint and must be updated to 0.58.0.
@@ -290,7 +282,33 @@ Notices appear at the top of the panel when the addon can't validate:
 - The MSW worker is missing from `context.msw`.
 
 The exact texts are listed in [Errors](#errors). With validation off, the panel
-shows a hint how to turn it on. The panel also links to the Mokapi dashboard.
+shows only a hint how to turn it on, without toolbar.
+
+### Entries
+
+Each entry is a row with an icon, the result, the method and URL of the request,
+and the HTTP status of the response and the time on the right. The result is one
+of these:
+
+| Result                 | Icon | Meaning                                                                          |
+|------------------------|------|----------------------------------------------------------------------------------|
+| valid                  | check mark | Request and response fit the contract. The request links to the matched operation |
+| invalid                | red stop sign | The contract is violated. The row has a red background and lists each error with its `location` (for example `response.body`) and message below it |
+| not in contract        | empty circle | Mokapi found no operation for the request, or several APIs match. The entry shows Mokapi's message |
+| Mokapi not reachable   | empty circle | The request to Mokapi failed. The entry shows the URL and a hint to `dashboardUrl` |
+
+In valid and invalid entries, the request (for example `GET /api/profile/1`)
+links to the page of the operation Mokapi matched in the Mokapi dashboard and
+opens in a new tab. Hover the link to see the operation, for example
+`GET /profile/{id}`. Entries that are not in the contract or not reachable have
+no link.
+
+Under each entry, **Request / Response** is collapsed. Click it to see the
+headers and the body of the request and of the response as the addon sent them
+to Mokapi. A JSON body is pretty-printed, and an empty body shows `(empty)`. The
+panel shows at most 10,000 characters of a body and adds
+`(truncated to 10,000 characters)` if it cut one. Mokapi always gets the full
+body.
 
 ## Failing stories
 
@@ -307,7 +325,7 @@ story has a failing result:
 In the Storybook UI the addon doesn't throw an error for a failed story. There
 is no error display, no entry under **Interactions** and no red error screen in
 the preview. The story finishes with status `error` because of its `failed`
-report, and the **Mokapi** panel shows the status line and the details.
+report, and the **Mokapi** panel shows the `FAIL` badge, the headline and the details.
 
 Set the default for all stories in `.storybook/main.ts`:
 
@@ -386,7 +404,7 @@ when you switch validation off.
 ### Error message
 
 The error message looks like this. Under Vitest a failed story throws it, in
-the Storybook UI its first line is the status line of the panel and the
+the Storybook UI its first line is the headline of the panel and the
 description of the sidebar status:
 
 ```
@@ -596,6 +614,7 @@ validation off, a story without a worker runs without any message.
 - The addon needs a worker (or server) with MSW's `events.on` in `context.msw`.
 - Mokapi validates the request and response pair against the contract. It does
   not run your handlers.
+- The panel shows a binary body as text, so it can look garbled.
 - Storybook with Vite and CSF3 only. Webpack and CSF Next are not supported.
   Only React projects are tested.
 - A Storybook served over HTTPS can't reach Mokapi on a plain `http://` address, see

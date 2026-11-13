@@ -1,13 +1,25 @@
 /** @jsxRuntime classic */
 // The Storybook manager provides `react` but not `react/jsx-runtime`, so this file must not use the automatic runtime.
 import React, { useSyncExternalStore, type ReactNode } from 'react';
-import { addons, experimental_getStatusStore, types, useGlobals, useStorybookState } from 'storybook/manager-api';
+import { addons, experimental_getStatusStore, types, useGlobals, useStorybookApi, useStorybookState } from 'storybook/manager-api';
 import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDER_PHASE_CHANGED } from 'storybook/internal/core-events';
-import { Badge, Link, ScrollArea, ToggleButton } from 'storybook/internal/components';
-import { VerifiedIcon } from '@storybook/icons';
-import { styled } from 'storybook/theming';
+import { Badge, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
+import { CheckIcon, CircleHollowIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
+import { styled, useTheme } from 'storybook/theming';
 import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
-import { countLines, KIND_LABELS, sidebarStatus, statusLine, STATUS_TYPE_ID, testModeText } from './report.js';
+import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
+import {
+  BODY_LIMIT,
+  countLine,
+  formatBody,
+  KIND_LABELS,
+  reportBadge,
+  reportHeadline,
+  sidebarStatus,
+  STATUS_TYPE_ID,
+  testModeText,
+  type ReportBadge,
+} from './report.js';
 import {
   PANEL_EVENT,
   initialPanelState,
@@ -15,10 +27,10 @@ import {
   reducePanel,
   resultsOfStory,
   type Entry,
+  type MessageDetails,
   type Notice,
   type PanelAction,
   type PanelState,
-  type ReportStatus,
 } from './results.js';
 import { toggleState } from './toggle.js';
 import type { ResolvedAddonOptions } from './types.js';
@@ -37,11 +49,20 @@ const TEST_PROVIDER_ID = 'mokapi/test-provider';
 // The panel is only mounted while its tab is open, but the badge must count while it is closed.
 // So the results live here and both the tab title and the panel subscribe to them.
 let panelState: PanelState = initialPanelState;
+// Fed by the render phases, so Rerun is right even when the panel opens while a story renders.
+let rendering: Rendering = initialRendering;
 const subscribers = new Set<() => void>();
+
+const notifySubscribers = (): void => subscribers.forEach((notify) => notify());
 
 function receive(action: PanelAction): void {
   panelState = reducePanel(panelState, action);
-  subscribers.forEach((notify) => notify());
+  notifySubscribers();
+}
+
+function trackRendering(event: RenderingEvent): void {
+  rendering = nextRendering(rendering, event);
+  notifySubscribers();
 }
 
 function subscribe(notify: () => void): () => void {
@@ -64,29 +85,66 @@ const PanelRoot = styled.div(({ theme }) => ({
   fontSize: theme.typography.size.s1,
 }));
 const PanelScroll = styled(ScrollArea)({ height: '100%' });
-const Content = styled.section({ padding: 16, minWidth: 0 });
+const Hint = styled.p({ margin: 0, padding: 16 });
 const Title = styled.span({ display: 'inline-flex', gap: 6, alignItems: 'center' });
-const EntryRow = styled.li(({ theme }) => ({
-  borderBottom: `1px solid ${theme.appBorderColor}`,
-  padding: '8px 0',
-  overflowWrap: 'anywhere',
+const ProviderLabel = styled.div({ padding: '8px 12px' });
+
+// Same look as the status badge of Storybook's Interactions panel, which is not exported.
+const StatusBadge = styled.span<{ status: ReportBadge['status'] }>(({ theme, status }) => ({
+  display: 'inline-block',
+  padding: '4px 6px 4px 8px',
+  borderRadius: 4,
+  backgroundColor: theme.color[status],
+  color: 'white',
+  textTransform: 'uppercase',
+  fontSize: theme.typography.size.s1,
+  fontWeight: theme.typography.weight.bold,
+  letterSpacing: 3,
+  minWidth: 65,
+  textAlign: 'center',
 }));
-const EntryStatus = styled.strong<{ status: Entry['status'] }>(({ theme, status }) => ({
+const ToolbarRow = styled.div(({ theme }) => ({
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 12,
+  padding: '8px 15px',
+  borderBottom: `1px solid ${theme.appBorderColor}`,
+  background: theme.background.app,
+}));
+const Headline = styled.span({ fontWeight: 'bold' });
+const ToolbarText = styled.span(({ theme }) => ({ color: theme.textMutedColor }));
+const ToolbarActions = styled.div({ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' });
+const NoticeRow = styled.div<{ kind: Notice['kind'] }>(({ theme, kind }) => ({
+  padding: '8px 15px',
+  borderBottom: `1px solid ${theme.appBorderColor}`,
+  color: kind === 'worker-missing' ? theme.color.warning : theme.color.negative,
+}));
+const EmptyText = styled.p({ margin: 0, padding: '8px 15px' });
+const EntryList = styled.ul({ margin: 0, padding: 0, listStyle: 'none' });
+// The invalid rows get the error background of failed steps in the Interactions panel. Storybook's
+// `transparentize` is no manager global, so the dark theme uses its negative color (#FF4400) at 7 % as literal.
+const EntryRow = styled.li<{ status: Entry['status'] }>(({ theme, status }) => ({
+  borderBottom: `1px solid ${theme.appBorderColor}`,
+  padding: '8px 15px',
+  overflowWrap: 'anywhere',
+  ...(status === 'invalid' && { backgroundColor: theme.base === 'dark' ? 'rgba(255, 68, 0, 0.07)' : theme.background.warning }),
+}));
+const EntryHeader = styled.div({ display: 'flex', alignItems: 'center', gap: 8 });
+const EntryKind = styled.strong<{ status: Entry['status'] }>(({ theme, status }) => ({
   color: status === 'valid' ? theme.color.positive : status === 'invalid' ? theme.color.negative : theme.color.mediumdark,
 }));
 const EntryUrl = styled.span(({ theme }) => ({ fontFamily: theme.typography.fonts.mono }));
-const Errors = styled.ul({ margin: '6px 0 0', paddingLeft: 20 });
-const ProviderLabel = styled.div({ padding: '8px 12px' });
-const ReportHeader = styled.h2({ margin: '0 0 8px', fontSize: 'inherit', fontWeight: 'bold' });
-// Without a report the story is still validating.
-const ReportStatusLine = styled.p<{ status?: ReportStatus }>(({ theme, status }) => ({
-  margin: '0 0 8px',
-  fontWeight: 'bold',
-  color: status === 'failed' ? theme.color.negative : status === 'warning' ? theme.color.warning : status === 'passed' ? theme.color.positive : theme.color.defaultText,
-}));
-const ReportCounts = styled.ul({ margin: '0 0 8px', padding: 0, listStyle: 'none' });
-const NoticeMessage = styled.p<{ kind: Notice['kind'] }>(({ theme, kind }) => ({
-  color: kind === 'worker-missing' ? theme.color.warning : theme.color.negative,
+const EntryMeta = styled.span(({ theme }) => ({ marginLeft: 'auto', whiteSpace: 'nowrap', color: theme.textMutedColor }));
+const Errors = styled.ul({ margin: '6px 0 0', paddingLeft: 40 });
+const EntryMessage = styled.div({ paddingLeft: 24 });
+const Details = styled.details({ marginTop: 6, paddingLeft: 24 });
+const Summary = styled.summary({ cursor: 'pointer' });
+const Pre = styled.pre(({ theme }) => ({
+  margin: '4px 0',
+  fontFamily: theme.typography.fonts.mono,
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
 }));
 
 function PanelTitle() {
@@ -99,27 +157,53 @@ function PanelTitle() {
   );
 }
 
+function EntryIcon({ status }: { status: Entry['status'] }) {
+  const { color } = useTheme();
+  if (status === 'valid') return <CheckIcon color={color.positive} />;
+  if (status === 'invalid') return <StopAltIcon color={color.negative} />;
+  return <CircleHollowIcon color={color.mediumdark} />;
+}
+
+const headerLines = (headers: Record<string, string>): string =>
+  Object.entries(headers).map(([name, value]) => `${name}: ${value}`).join('\n');
+
+function Message({ title, summary, details }: { title: string; summary: string; details?: MessageDetails }) {
+  if (!details) return null;
+  return (
+    <div>
+      <strong>{title}</strong>
+      {' '}
+      <EntryUrl>{summary}</EntryUrl>
+      {Object.keys(details.headers).length > 0 && <Pre>{headerLines(details.headers)}</Pre>}
+      <Pre>{formatBody(details.body)}</Pre>
+      {details.truncated && <div>{`(truncated to ${BODY_LIMIT.toLocaleString('en-US')} characters)`}</div>}
+    </div>
+  );
+}
+
 function EntryItem({ entry }: { entry: Entry }) {
   const request = `${entry.method} ${entry.url}`;
   return (
-    <EntryRow data-testid="mokapi-entry" data-status={entry.status}>
-      <EntryStatus status={entry.status}>{KIND_LABELS[entry.status]}</EntryStatus>
-      {' '}
-      <EntryUrl>
-        {entry.operation && entry.operationUrl ? (
-          <Link
-            href={entry.operationUrl}
-            target="_blank"
-            rel="noreferrer"
-            title={`${entry.operation.method} ${entry.operation.path}`}
-            data-testid="mokapi-operation"
-          >
-            {request}
-          </Link>
-        ) : request}
-      </EntryUrl>
-      {` | ${entry.statusCode} | ${new Date(entry.time).toLocaleTimeString()}`}
-      {entry.message && <div>{entry.message}</div>}
+    <EntryRow status={entry.status} data-testid="mokapi-entry" data-status={entry.status}>
+      <EntryHeader>
+        <EntryIcon status={entry.status} />
+        <EntryKind status={entry.status}>{KIND_LABELS[entry.status]}</EntryKind>
+        <EntryUrl>
+          {entry.operation && entry.operationUrl ? (
+            <Link
+              href={entry.operationUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={`${entry.operation.method} ${entry.operation.path}`}
+              data-testid="mokapi-operation"
+            >
+              {request}
+            </Link>
+          ) : request}
+        </EntryUrl>
+        <EntryMeta>{`${entry.statusCode} ${new Date(entry.time).toLocaleTimeString()}`}</EntryMeta>
+      </EntryHeader>
+      {entry.message && <EntryMessage>{entry.message}</EntryMessage>}
       {entry.errors.length > 0 && (
         <Errors>
           {entry.errors.map((error, index) => (
@@ -127,7 +211,61 @@ function EntryItem({ entry }: { entry: Entry }) {
           ))}
         </Errors>
       )}
+      {(entry.request || entry.response) && (
+        <Details data-testid="mokapi-details">
+          <Summary>Request / Response</Summary>
+          <Message title="Request" summary={request} details={entry.request} />
+          <Message title="Response" summary={String(entry.statusCode)} details={entry.response} />
+        </Details>
+      )}
     </EntryRow>
+  );
+}
+
+function ReportStatusBadge({ badge, testMode }: { badge: ReportBadge; testMode: NonNullable<PanelState['testMode']> }) {
+  return (
+    <WithTooltip hasChrome={false} placement="top" trigger="hover" tooltip={<TooltipNote note={testModeText(testMode)} />}>
+      <StatusBadge status={badge.status} data-testid="mokapi-report-badge">{badge.label}</StatusBadge>
+    </WithTooltip>
+  );
+}
+
+// Remounts the story like the switch of the validation does, so story, validation and report start again.
+// While the story renders this would make Storybook reload the preview.
+function RerunButton() {
+  const api = useStorybookApi();
+  const { storyId } = useStorybookState();
+  const renderingStories = useSyncExternalStore(subscribe, () => rendering);
+  return (
+    <IconButton
+      padding="small"
+      variant="ghost"
+      ariaLabel="Rerun"
+      data-testid="mokapi-rerun"
+      disabled={storyId === undefined || isRendering(renderingStories, storyId)}
+      onClick={() => api.emit(FORCE_REMOUNT, { storyId })}
+    >
+      <SyncIcon />
+    </IconButton>
+  );
+}
+
+function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: string }) {
+  const { entries, testMode, report } = state;
+  const badge = reportBadge(testMode, report);
+  const headline = reportHeadline(report);
+  const counts = countLine(entries);
+  return (
+    <ToolbarRow>
+      {badge && testMode && <ReportStatusBadge badge={badge} testMode={testMode} />}
+      {headline && <Headline data-testid="mokapi-report-headline">{headline}</Headline>}
+      {counts && <ToolbarText data-testid="mokapi-report-counts">{counts}</ToolbarText>}
+      {testMode === 'off' && <ToolbarText data-testid="mokapi-test-mode">{testModeText(testMode)}</ToolbarText>}
+      <ToolbarActions>
+        <RerunButton />
+        {dashboardUrl && <Link href={dashboardUrl} target="_blank" rel="noreferrer">Open Mokapi dashboard</Link>}
+      </ToolbarActions>
+    </ToolbarRow>
   );
 }
 
@@ -149,38 +287,28 @@ function ValidationToggle() {
 }
 
 function PanelFrame({ children }: { children: ReactNode }) {
-  return <PanelRoot><PanelScroll vertical><Content>{children}</Content></PanelScroll></PanelRoot>;
+  return <PanelRoot><PanelScroll vertical>{children}</PanelScroll></PanelRoot>;
 }
 
 function Panel() {
   const [globals] = useGlobals();
   const { selectedPanel, layout } = useStorybookState();
-  const { entries, notices, testMode, report } = useResultsOfSelectedStory();
+  const state = useResultsOfSelectedStory();
   const dashboardUrl = window.__MOKAPI_PANEL_OPTIONS__?.dashboardUrl;
   if (selectedPanel !== PANEL_ID || !layout.showPanel) return null;
-  const line = statusLine(testMode, report);
-  const counts = countLines(entries);
   if (globals.mokapiValidation !== 'on') {
-    return <PanelFrame><p>{`Turn on validation with the "${TOGGLE_NAME}" toggle in the toolbar.`}</p></PanelFrame>;
+    return <PanelFrame><Hint>{`Turn on validation with the "${TOGGLE_NAME}" toggle in the toolbar.`}</Hint></PanelFrame>;
   }
   return (
     <PanelFrame>
-      <ReportHeader>Mokapi Contract Validation</ReportHeader>
-      {line && <ReportStatusLine status={report?.status} data-testid="mokapi-report-status">{line}</ReportStatusLine>}
-      {counts.length > 0 && (
-        <ReportCounts data-testid="mokapi-report-counts">
-          {counts.map((count) => <li key={count}>{count}</li>)}
-        </ReportCounts>
-      )}
-      {testMode && <p data-testid="mokapi-test-mode">{testModeText(testMode)}</p>}
-      {notices.map((notice) => (
-        <NoticeMessage key={`${notice.kind}-${notice.message}`} kind={notice.kind} role="alert">{notice.message}</NoticeMessage>
+      <Toolbar state={state} dashboardUrl={dashboardUrl} />
+      {state.notices.map((notice) => (
+        <NoticeRow key={`${notice.kind}-${notice.message}`} kind={notice.kind} role="alert">{notice.message}</NoticeRow>
       ))}
-      {dashboardUrl && <Link href={dashboardUrl} target="_blank" rel="noreferrer">Open Mokapi dashboard</Link>}
-      {!entries.length && <p>No responses validated since this story was rendered.</p>}
-      <ul role="list" style={{ listStyle: 'none', padding: 0 }}>
-        {entries.map((entry) => <EntryItem key={entry.sequence} entry={entry} />)}
-      </ul>
+      {!state.entries.length && <EmptyText>No responses validated since this story was mounted.</EmptyText>}
+      <EntryList role="list">
+        {state.entries.map((entry) => <EntryItem key={entry.sequence} entry={entry} />)}
+      </EntryList>
     </PanelFrame>
   );
 }
@@ -214,8 +342,10 @@ addons.register('mokapi', (api) => {
   api.on(STORY_CHANGED, () => handle({ type: 'story-changed' }));
   // `loading` is the first phase of every render, `finished` the last one.
   api.on(STORY_RENDER_PHASE_CHANGED, ({ newPhase, storyId }: { newPhase: string; storyId: string }) => {
-    if (newPhase === 'loading') handle({ type: 'started', storyId });
-    if (newPhase === 'finished') handle({ type: 'finished', storyId });
+    const type = newPhase === 'loading' ? 'started' : newPhase === 'finished' ? 'finished' : undefined;
+    if (!type) return;
+    handle({ type, storyId });
+    trackRendering({ type, storyId });
   });
   addons.add(TOGGLE_ID, {
     type: types.TOOL,

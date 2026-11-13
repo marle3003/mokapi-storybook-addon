@@ -10,6 +10,9 @@ export const Valid = { parameters: { msw: { handlers: [profileHandler(jane)] } }
 // The contract requires `email`.
 export const Invalid = { parameters: { msw: { handlers: [profileHandler({ name: 'Jane Doe' })] } } };
 
+// The response body is longer than the 10,000 characters the panel shows. The contract has no maxLength for `name`.
+export const LargeBody = { parameters: { msw: { handlers: [profileHandler({ ...jane, name: 'x'.repeat(12_000) })] } } };
+
 export const PathPattern = {
   args: { path: '/api/users/42' },
   parameters: { msw: { handlers: [userHandler] } },

@@ -4,6 +4,13 @@ import type { Operation, ValidationError } from './validation.js';
 // The preview sends the story's validation results to the manager panel on this channel event.
 export const PANEL_EVENT = 'mokapi/validation';
 
+/** What the panel shows of a request or response; `body` is cut to `BODY_LIMIT` characters and `truncated` says so. */
+export interface MessageDetails {
+  headers: Record<string, string>;
+  body: string;
+  truncated: boolean;
+}
+
 export interface Entry {
   /** Order in which the request was captured, because results arrive in the order Mokapi answers. */
   sequence: number;
@@ -16,6 +23,8 @@ export interface Entry {
   /** The contract operation Mokapi matched (valid and invalid entries) and its page in the dashboard. */
   operation?: Operation;
   operationUrl?: string;
+  request?: MessageDetails;
+  response?: MessageDetails;
   /** Set when Mokapi could not be reached: the URL and a hint to the dashboardUrl option. */
   message?: string;
 }

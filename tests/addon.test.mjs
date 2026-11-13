@@ -5,9 +5,23 @@ import { resolveOptions } from '../dist/index.js';
 import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '../dist/results.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
+import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
 import { toggleState } from '../dist/toggle.js';
 import { testHook, validationHook } from '../dist/listener.js';
-import { countLines, errorMessage, operationUrl, reportStatus, resolveTestMode, sidebarStatus, statusLine, testModeText } from '../dist/report.js';
+import {
+  BODY_LIMIT,
+  countLine,
+  errorMessage,
+  formatBody,
+  operationUrl,
+  reportBadge,
+  reportHeadline,
+  reportStatus,
+  resolveTestMode,
+  sidebarStatus,
+  testModeText,
+  truncateBody,
+} from '../dist/report.js';
 import { classify, sendValidation, serializePair } from '../dist/validation.js';
 
 test('options default to the local Mokapi dashboard and validation off', () => {
@@ -293,6 +307,12 @@ test('listener sends the mocked pair with the API of the story and reports the r
       errors: answers.invalid.errors,
       operation: answers.invalid.operation,
       operationUrl: 'http://localhost:8080/dashboard/http/services/Profile%20API/profile/get',
+      request: { headers: {}, body: '', truncated: false },
+      response: {
+        headers: { 'content-type': 'application/json' },
+        body: '{"name":"Jane Doe","email":"jane@example.com"}',
+        truncated: false,
+      },
     },
   );
   assert.equal(typeof action.entry.sequence, 'number');
@@ -313,6 +333,50 @@ test('listener leaves the operation out of entries that Mokapi did not match', a
   const unreachable = panel.next();
   worker.mocked(getProfile(), jsonResponse(), 'other');
   assert.equal('operationUrl' in (await unreachable).entry, false);
+});
+
+test('listener puts request and response headers and bodies into valid and unreachable entries', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), hookOptions(panel));
+  const post = () => new Request('http://localhost:6006/api/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{"name":"Jane"}',
+  });
+  const valid = panel.next();
+  worker.mocked(post(), jsonResponse());
+  const details = (await valid).entry;
+  assert.equal(details.status, 'valid');
+  assert.deepEqual(details.request, { headers: { 'content-type': 'application/json' }, body: '{"name":"Jane"}', truncated: false });
+  assert.deepEqual(details.response, {
+    headers: { 'content-type': 'application/json' },
+    body: '{"name":"Jane Doe","email":"jane@example.com"}',
+    truncated: false,
+  });
+
+  fetch.mock.mockImplementation(async () => { throw new TypeError('Failed to fetch'); });
+  const unreachable = panel.next();
+  worker.mocked(post(), jsonResponse(), 'other');
+  const { entry } = await unreachable;
+  assert.equal(entry.status, 'unreachable');
+  assert.equal(entry.request.body, '{"name":"Jane"}');
+  assert.equal(entry.response.body, '{"name":"Jane Doe","email":"jane@example.com"}');
+});
+
+test('listener cuts a body over the limit in the entry and sends the full body to Mokapi', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), hookOptions(panel));
+  const body = 'x'.repeat(BODY_LIMIT + 1);
+  const result = panel.next();
+  worker.mocked(getProfile(), new Response(body));
+  const { entry } = await result;
+  assert.deepEqual(entry.response, { headers: { 'content-type': 'text/plain;charset=UTF-8' }, body: 'x'.repeat(BODY_LIMIT), truncated: true });
+  assert.equal(entry.request.truncated, false);
+  assert.equal(JSON.parse(fetch.mock.calls[0].arguments[1].body).response.body, body);
 });
 
 const invalidEntry = (overrides = {}) => ({
@@ -490,33 +554,56 @@ test('requests are attributed to the story that rendered last', async (t) => {
 
 const unreachableEntry = () => ({ ...validEntry(), status: 'unreachable' });
 
-test('counts name the validated responses and one line per kind that occurs', () => {
-  assert.deepEqual(countLines([validEntry(), invalidEntry(), invalidEntry(), notInContractEntry(), unreachableEntry()]), [
-    '5 responses validated', '1 valid', '2 invalid', '1 not in contract', '1 Mokapi not reachable',
-  ]);
+test('count line names the validated responses and the kinds that occur', () => {
+  assert.equal(
+    countLine([validEntry(), invalidEntry(), invalidEntry(), notInContractEntry(), unreachableEntry()]),
+    '5 responses validated, 1 valid, 2 invalid, 1 not in contract, 1 Mokapi not reachable',
+  );
 });
 
-test('counts leave out kinds without entries and use the singular for one response', () => {
-  assert.deepEqual(countLines([invalidEntry()]), ['1 response validated', '1 invalid']);
-  assert.deepEqual(countLines([validEntry(), validEntry()]), ['2 responses validated', '2 valid']);
+test('count line leaves out kinds without entries and uses the singular for one response', () => {
+  assert.equal(countLine([invalidEntry()]), '1 response validated, 1 invalid');
+  assert.equal(countLine([validEntry(), validEntry()]), '2 responses validated, 2 valid');
 });
 
-test('counts are empty without entries', () => {
-  assert.deepEqual(countLines([]), []);
+test('count line is undefined without entries', () => {
+  assert.equal(countLine([]), undefined);
 });
 
-test('status line says validating until the report exists, in every mode but off', () => {
-  for (const mode of ['error', 'todo']) assert.equal(statusLine(mode, undefined), 'Validating...');
-  assert.equal(statusLine('off', undefined), undefined);
-  assert.equal(statusLine('off', { status: 'warning', message: 'ignored' }), undefined);
-  assert.equal(statusLine(undefined, undefined), undefined);
+test('badge says WAIT until the report exists, in every mode but off', () => {
+  for (const mode of ['error', 'todo']) assert.deepEqual(reportBadge(mode, undefined), { label: 'WAIT', status: 'mediumdark' });
+  assert.equal(reportBadge('off', undefined), undefined);
+  assert.equal(reportBadge('off', { status: 'warning', message: 'ignored' }), undefined);
+  assert.equal(reportBadge(undefined, undefined), undefined);
 });
 
-test('status line shows the report status with the first line of its message', () => {
+test('badge maps the report status to PASS, WARN and FAIL', () => {
+  assert.deepEqual(reportBadge('error', { status: 'passed', message: '' }), { label: 'PASS', status: 'positive' });
+  assert.deepEqual(reportBadge('todo', { status: 'warning', message: 'x' }), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', message: 'x' }), { label: 'FAIL', status: 'negative' });
+});
+
+test('headline is the first line of the message for a warning and a failed report only', () => {
   const message = 'Mokapi: 1 response does not match the contract.\n\nGET /api/profile\n  response.body: not valid';
-  assert.equal(statusLine('error', { status: 'failed', message }), 'Failed: Mokapi: 1 response does not match the contract.');
-  assert.equal(statusLine('todo', { status: 'warning', message }), 'Warning: Mokapi: 1 response does not match the contract.');
-  assert.equal(statusLine('error', { status: 'passed', message: '' }), 'Passed');
+  assert.equal(reportHeadline({ status: 'failed', message }), 'Mokapi: 1 response does not match the contract.');
+  assert.equal(reportHeadline({ status: 'warning', message }), 'Mokapi: 1 response does not match the contract.');
+  assert.equal(reportHeadline({ status: 'passed', message: '' }), undefined);
+  assert.equal(reportHeadline(undefined), undefined);
+});
+
+test('a body is cut after 10,000 characters and flagged only when something was cut', () => {
+  assert.equal(BODY_LIMIT, 10_000);
+  const atLimit = 'a'.repeat(BODY_LIMIT);
+  assert.deepEqual(truncateBody(atLimit), { body: atLimit, truncated: false });
+  assert.deepEqual(truncateBody(`${atLimit}b`), { body: atLimit, truncated: true });
+  assert.deepEqual(truncateBody(''), { body: '', truncated: false });
+});
+
+test('a body is shown pretty-printed as JSON, as text otherwise and as (empty) without content', () => {
+  assert.equal(formatBody('{"name":"Jane","tags":["a"]}'), '{\n  "name": "Jane",\n  "tags": [\n    "a"\n  ]\n}');
+  assert.equal(formatBody('{"name":'), '{"name":');
+  assert.equal(formatBody('plain text'), 'plain text');
+  assert.equal(formatBody(''), '(empty)');
 });
 
 test('sidebar status is an error for a failed and a warning for a warning report, titled Mokapi', () => {
@@ -1114,6 +1201,36 @@ test('panel starts empty and a render of a story clears its entries and notices'
   assert.deepEqual(initialPanelState, { renderId: 0, entries: [], notices: [] });
   const state = reduceAll(renderStarted(1), resultOf(1, 1), noticeOf(1, 'unreachable'), renderStarted(2));
   assert.deepEqual(state, { storyId: 'a--one', renderId: 2, entries: [], notices: [] });
+});
+
+test('a story is rendering from its started phase until its finished phase', () => {
+  const started = nextRendering(initialRendering, { type: 'started', storyId: 'a--one' });
+  assert.equal(isRendering(started, 'a--one'), true);
+  assert.equal(isRendering(nextRendering(started, { type: 'finished', storyId: 'a--one' }), 'a--one'), false);
+  assert.equal(isRendering(initialRendering, 'a--one'), false);
+});
+
+test('rendering is tracked per story', () => {
+  const started = nextRendering(initialRendering, { type: 'started', storyId: 'a--one' });
+  assert.equal(isRendering(started, 'a--two'), false);
+  const bothStarted = nextRendering(started, { type: 'started', storyId: 'a--two' });
+  const oneFinished = nextRendering(bothStarted, { type: 'finished', storyId: 'a--two' });
+  assert.deepEqual([isRendering(oneFinished, 'a--one'), isRendering(oneFinished, 'a--two')], [true, false]);
+});
+
+test('a finished phase without a started phase and a repeated started phase do not break the tracking', () => {
+  assert.equal(isRendering(nextRendering(initialRendering, { type: 'finished', storyId: 'a--one' }), 'a--one'), false);
+  const twice = nextRendering(nextRendering(initialRendering, { type: 'started', storyId: 'a--one' }), { type: 'started', storyId: 'a--one' });
+  assert.equal(isRendering(nextRendering(twice, { type: 'finished', storyId: 'a--one' }), 'a--one'), false);
+});
+
+test('panel keeps the request and response details of an entry', () => {
+  const request = { headers: { accept: '*/*' }, body: '', truncated: false };
+  const response = { headers: { 'content-type': 'application/json' }, body: '{"name":"Jane"}', truncated: false };
+  const detailed = { ...entry(1), request, response };
+  const state = reduceAll(renderStarted(1), { type: 'result', renderId: 1, entry: detailed });
+  assert.deepEqual(state.entries[0].request, request);
+  assert.deepEqual(state.entries[0].response, response);
 });
 
 test('panel keeps the test mode of the render and resets it with the next render', () => {
