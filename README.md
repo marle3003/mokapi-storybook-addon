@@ -385,8 +385,9 @@ export const Legacy = {
 ```
 
 The test mode only applies while validation is on. It never turns validation on
-by itself. In CI, set `defaultValidation: true` or open the story with
-`globals=mokapiValidation:on`.
+by itself. In CI, set `defaultValidation: true`, set
+`initialGlobals: { mokapiValidation: 'on' }` in `storybookTest` (see
+[Vitest](#vitest)) or open the story with `globals=mokapiValidation:on`.
 
 ### What fails
 
@@ -489,10 +490,61 @@ With `@storybook/addon-vitest`, a story in `'error'` mode fails its test with th
 Mokapi message, see [Error message](#error-message). This applies to **Run
 tests** in the Storybook UI and to `vitest run`. The addon throws only when it
 detects a Vitest browser run, because addon-vitest fails a test only on a thrown
-error and ignores a `failed` report. Set
-`defaultValidation: true` so that the stories are validated, and make sure that
-Mokapi runs with your contract while Vitest runs. Stories in `'todo'` and
-`'off'` pass.
+error and ignores a `failed` report. Make sure that Mokapi runs with your
+contract while Vitest runs. Stories in `'todo'` and `'off'` pass.
+
+Component tests don't take the toolbar state from the Storybook UI. The toolbar
+button changes the globals of the preview you're looking at, but **Run tests**
+and `vitest run` start every story in their own Vitest context, with the initial
+globals. So if you turn validation on in the toolbar while `defaultValidation`
+is `false`, the panel shows the contract errors and the component test still
+passes, because nothing was validated in it.
+
+To validate in the tests, set `defaultValidation: true`, or turn validation on
+for the Vitest project only with `initialGlobals` of `storybookTest`. Then the
+Storybook UI starts with validation off and the tests always validate:
+
+```ts
+// vitest.config.ts
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vitest/config';
+import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
+
+export default defineConfig({
+  test: {
+    projects: [
+      {
+        extends: true,
+        plugins: [
+          storybookTest({
+            configDir: fileURLToPath(new URL('./.storybook', import.meta.url)),
+            initialGlobals: { mokapiValidation: 'on' },
+          }),
+        ],
+        // test: { name: 'storybook', browser: { ... } }
+      },
+    ],
+  },
+});
+```
+
+```ts
+// .storybook/main.ts
+export default {
+  addons: [
+    {
+      name: 'mokapi-storybook-addon',
+      options: {
+        defaultValidation: false,
+        defaultTest: 'error',
+      },
+    },
+  ],
+};
+```
+
+With this setup a contract error fails the component test in `'error'` mode,
+whatever the toolbar shows.
 
 The addon adds its result with Storybook's reporting API as a report of type
 `mokapi`, with the status `passed`, `warning` or `failed`.
@@ -574,8 +626,11 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 | `'on'`  | Validate the responses of the mocked requests   |
 | `'off'` | Validate nothing (default)                      |
 
-The toolbar button switches the global. You can set the initial value with
-`defaultValidation`, or with the URL parameter `globals=mokapiValidation:on`.
+The toolbar button switches the global of the current preview only. You can set
+the initial value with `defaultValidation`, with the URL parameter
+`globals=mokapiValidation:on`, or for component tests with
+`storybookTest({ initialGlobals: { mokapiValidation: 'on' } })`, see
+[Vitest](#vitest).
 
 ### TypeScript
 
