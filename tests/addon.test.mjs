@@ -6,14 +6,16 @@ import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '..
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
+import { applyTestRun, forgetStoryRun, panelOf, ranStoryIds, testRunResults } from '../dist/test-run.js';
 import { toggleState } from '../dist/toggle.js';
-import { testHook, validationHook } from '../dist/listener.js';
+import { MokapiContractError, testHook, validationHook } from '../dist/listener.js';
 import {
   BODY_LIMIT,
   countLine,
   errorMessage,
   formatBody,
   formatTime,
+  headline,
   methodColor,
   operationUrl,
   reportBadge,
@@ -30,21 +32,22 @@ import {
 import { classify, sendValidation, serializePair } from '../dist/validation.js';
 
 test('options default to the local Mokapi dashboard and validation off', () => {
-  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'todo' });
+  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'warning' });
   assert.deepEqual(resolveOptions({}), resolveOptions());
 });
 
 test('options keep the given values and strip trailing slashes from the dashboard URL', () => {
   assert.deepEqual(
     resolveOptions({ dashboardUrl: 'https://mokapi.example.com/', defaultValidation: true }),
-    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true, defaultTest: 'todo' },
+    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true, defaultTest: 'warning' },
   );
 });
 
-test('options accept the test modes error, todo and off and reject anything else', () => {
-  for (const defaultTest of ['error', 'todo', 'off']) assert.equal(resolveOptions({ defaultTest }).defaultTest, defaultTest);
-  for (const defaultTest of ['strict', '', true, null]) {
-    assert.throws(() => resolveOptions({ defaultTest }), /^Error: Mokapi: defaultTest must be 'error', 'todo' or 'off'\.$/);
+test('options accept the test modes error, warning and off and reject anything else', () => {
+  for (const defaultTest of ['error', 'warning', 'off']) assert.equal(resolveOptions({ defaultTest }).defaultTest, defaultTest);
+  // `todo` was the name of `warning` before.
+  for (const defaultTest of ['strict', 'todo', '', true, null]) {
+    assert.throws(() => resolveOptions({ defaultTest }), /^Error: Mokapi: defaultTest must be 'error', 'warning' or 'off'\.$/);
   }
 });
 
@@ -237,7 +240,7 @@ function recorder() {
   };
 }
 
-const hookOptions = (panel, defaultTest = 'todo') => ({ emit: panel.emit, dashboardUrl, defaultTest });
+const hookOptions = (panel, defaultTest = 'warning') => ({ emit: panel.emit, dashboardUrl, defaultTest });
 
 test('hook registers its listeners once per worker across repeated runs', () => {
   const worker = fakeWorker();
@@ -265,14 +268,14 @@ test('hook announces every render with the story and a new render id', () => {
 test('hook announces the resolved test mode while validating, also without a worker or with an invalid parameter', () => {
   const panel = recorder();
   const worker = fakeWorker();
-  validationHook(storyContext(worker, { id: 'a--default' }), hookOptions(panel, 'todo'));
-  validationHook(storyContext(worker, { id: 'a--error', mokapi: { test: 'error' } }), hookOptions(panel, 'todo'));
+  validationHook(storyContext(worker, { id: 'a--default' }), hookOptions(panel, 'warning'));
+  validationHook(storyContext(worker, { id: 'a--error', mokapi: { test: 'error' } }), hookOptions(panel, 'warning'));
   validationHook(storyContext(worker, { id: 'a--off', mokapi: { test: 'off' } }), hookOptions(panel, 'error'));
   validationHook(storyContext(worker, { id: 'a--invalid', mokapi: { test: 'strict' } }), hookOptions(panel, 'error'));
-  validationHook(storyContext(undefined, { id: 'a--no-worker', mokapi: { test: 'error' } }), hookOptions(panel, 'todo'));
+  validationHook(storyContext(undefined, { id: 'a--no-worker', mokapi: { test: 'error' } }), hookOptions(panel, 'warning'));
   const started = panel.actions.filter(({ type }) => type === 'render-started');
   assert.deepEqual(started.map(({ storyId, testMode }) => [storyId, testMode]), [
-    ['a--default', 'todo'], ['a--error', 'error'], ['a--off', 'off'], ['a--invalid', 'error'], ['a--no-worker', 'error'],
+    ['a--default', 'warning'], ['a--error', 'error'], ['a--off', 'off'], ['a--invalid', 'error'], ['a--no-worker', 'error'],
   ]);
 });
 
@@ -402,20 +405,21 @@ const panelNotice = (kind, message = `${kind} message`) => ({ kind, message });
 const stateOf = (entries = [], notices = []) => ({ ...initialPanelState, entries, notices });
 
 test('the test mode of a story is its parameter, an invalid parameter falls back to the default and is flagged', () => {
-  assert.deepEqual(resolveTestMode(undefined, 'todo'), { mode: 'todo', invalid: false });
-  assert.deepEqual(resolveTestMode('error', 'todo'), { mode: 'error', invalid: false });
+  assert.deepEqual(resolveTestMode(undefined, 'warning'), { mode: 'warning', invalid: false });
+  assert.deepEqual(resolveTestMode('error', 'warning'), { mode: 'error', invalid: false });
   assert.deepEqual(resolveTestMode('off', 'error'), { mode: 'off', invalid: false });
   assert.deepEqual(resolveTestMode('strict', 'error'), { mode: 'error', invalid: true });
   assert.deepEqual(resolveTestMode(true, 'off'), { mode: 'off', invalid: true });
+  assert.deepEqual(resolveTestMode('todo', 'error'), { mode: 'error', invalid: true });
 });
 
 test('the panel explains what each test mode does', () => {
   assert.equal(testModeText('error'), 'Test mode: error. Contract errors make this story fail.');
-  assert.equal(testModeText('todo'), 'Test mode: todo. Contract errors are reported as warnings, the story stays green.');
+  assert.equal(testModeText('warning'), 'Test mode: warning. Contract errors are reported as warnings, the story stays green.');
   assert.equal(testModeText('off'), 'Test mode: off. Contract errors are shown here only.');
 });
 
-test('report status is failed in error mode and warning in todo mode for every failing result', () => {
+test('report status is failed in error mode and warning in warning mode for every failing result', () => {
   const failing = [
     stateOf([invalidEntry()]),
     stateOf([], [panelNotice('unreachable')]),
@@ -425,7 +429,7 @@ test('report status is failed in error mode and warning in todo mode for every f
   ];
   for (const state of failing) {
     assert.equal(reportStatus(state, 'error'), 'failed');
-    assert.equal(reportStatus(state, 'todo'), 'warning');
+    assert.equal(reportStatus(state, 'warning'), 'warning');
   }
 });
 
@@ -436,15 +440,31 @@ test('report status ignores results that are not in the contract, a missing work
     stateOf([], [panelNotice('worker-missing')]),
   ]) {
     assert.equal(reportStatus(state, 'error'), 'passed');
-    assert.equal(reportStatus(state, 'todo'), 'passed');
+    assert.equal(reportStatus(state, 'warning'), 'passed');
   }
 });
 
-test('error message names the count, the request, the operation with its dashboard page and the errors', () => {
+const FAILED = 'Mokapi contract validation failed: ';
+const requestLine = (id) => `GET /api/profile/${id} -> GET /profile/{id} (http://localhost:8080/dashboard/http/services/Profile%20API/profile/%7Bid%7D/get)`;
+
+test('headline counts the invalid responses and uses the plural', () => {
+  assert.equal(headline(stateOf([validEntry(), invalidEntry(), notInContractEntry()])), '1 response does not match the contract.');
+  assert.equal(headline(stateOf([invalidEntry(), invalidEntry({ sequence: 2 })])), '2 responses do not match the contract.');
+});
+
+test('headline is the first failing notice when no response is invalid and empty when nothing fails', () => {
+  const notices = [panelNotice('worker-missing'), panelNotice('unreachable', 'not reachable'), panelNotice('timeout', 'timeout (GET /a).')];
+  assert.equal(headline(stateOf([validEntry()], notices)), 'not reachable');
+  assert.equal(headline(stateOf([invalidEntry()], notices)), '1 response does not match the contract.');
+  assert.equal(headline(stateOf([validEntry(), notInContractEntry()], [panelNotice('worker-missing')])), '');
+  assert.equal(headline(initialPanelState), '');
+});
+
+test('error message names Mokapi and the count, then the request, the operation with its dashboard page and the errors', () => {
   assert.equal(errorMessage(stateOf([invalidEntry()])), [
-    'Mokapi: 1 response does not match the contract.',
+    `${FAILED}1 response does not match the contract.`,
     '',
-    'GET /api/profile/1 -> GET /profile/{id} (http://localhost:8080/dashboard/http/services/Profile%20API/profile/%7Bid%7D/get)',
+    requestLine(1),
     "  response.body: missing required property 'name'",
   ].join('\n'));
 });
@@ -454,9 +474,8 @@ test('error message counts only invalid entries and uses the plural', () => {
     { location: 'response.status', message: 'status 500 not defined' },
     { location: 'response.body', message: 'not valid' },
   ] });
-  const requestLine = (id) => `GET /api/profile/${id} -> GET /profile/{id} (http://localhost:8080/dashboard/http/services/Profile%20API/profile/%7Bid%7D/get)`;
   assert.equal(errorMessage(stateOf([validEntry(), invalidEntry(), notInContractEntry(), second])), [
-    'Mokapi: 2 responses do not match the contract.',
+    `${FAILED}2 responses do not match the contract.`,
     '',
     requestLine(1),
     "  response.body: missing required property 'name'",
@@ -466,13 +485,17 @@ test('error message counts only invalid entries and uses the plural', () => {
   ].join('\n'));
 });
 
-test('error message lists the failing notices with their panel text and starts with the first one when nothing is invalid', () => {
-  const notices = [panelNotice('worker-missing'), panelNotice('unreachable', 'not reachable'), panelNotice('timeout', 'timeout (GET /a).'), panelNotice('timeout', 'timeout (GET /b).')];
-  assert.equal(errorMessage(stateOf([validEntry()], notices)), 'not reachable\ntimeout (GET /a).\ntimeout (GET /b).');
+test('error message lists the failing notices after the invalid entries', () => {
   assert.equal(
     errorMessage(stateOf([invalidEntry()], [panelNotice('config-error', 'api not found')])).split('\n').at(-1),
     'api not found',
   );
+});
+
+test('error message of failing notices only starts with the first one and does not repeat it', () => {
+  const notices = [panelNotice('worker-missing'), panelNotice('unreachable', 'not reachable'), panelNotice('timeout', 'timeout (GET /a).'), panelNotice('timeout', 'timeout (GET /b).')];
+  assert.equal(errorMessage(stateOf([validEntry()], notices)), `${FAILED}not reachable\n\ntimeout (GET /a).\ntimeout (GET /b).`);
+  assert.equal(errorMessage(stateOf([], [panelNotice('unreachable', 'not reachable')])), `${FAILED}not reachable`);
 });
 
 test('a response without a matched operation is listed by its request only', () => {
@@ -576,16 +599,16 @@ test('count line is undefined without entries', () => {
 });
 
 test('badge says WAIT until the report exists, in every mode but off', () => {
-  for (const mode of ['error', 'todo']) assert.deepEqual(reportBadge(mode, undefined), { label: 'WAIT', status: 'mediumdark' });
+  for (const mode of ['error', 'warning']) assert.deepEqual(reportBadge(mode, undefined), { label: 'WAIT', status: 'mediumdark' });
   assert.equal(reportBadge('off', undefined), undefined);
-  assert.equal(reportBadge('off', { status: 'warning', message: 'ignored' }), undefined);
+  assert.equal(reportBadge('off', { status: 'warning', headline: 'ignored' }), undefined);
   assert.equal(reportBadge(undefined, undefined), undefined);
 });
 
 test('badge maps the report status to PASS, WARN and FAIL', () => {
-  assert.deepEqual(reportBadge('error', { status: 'passed', message: '' }), { label: 'PASS', status: 'positive' });
-  assert.deepEqual(reportBadge('todo', { status: 'warning', message: 'x' }), { label: 'WARN', status: 'warning' });
-  assert.deepEqual(reportBadge('error', { status: 'failed', message: 'x' }), { label: 'FAIL', status: 'negative' });
+  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }), { label: 'PASS', status: 'positive' });
+  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }), { label: 'FAIL', status: 'negative' });
 });
 
 test('status color follows the status group, anything outside 100-599 is gray', () => {
@@ -646,11 +669,10 @@ test('time is formatted as HH:mm:ss in local time, whatever the locale', () => {
   assert.equal(formatTime(local(9, 5, 9, 999)), '09:05:09');
 });
 
-test('headline is the first line of the message for a warning and a failed report only', () => {
-  const message = 'Mokapi: 1 response does not match the contract.\n\nGET /api/profile\n  response.body: not valid';
-  assert.equal(reportHeadline({ status: 'failed', message }), 'Mokapi: 1 response does not match the contract.');
-  assert.equal(reportHeadline({ status: 'warning', message }), 'Mokapi: 1 response does not match the contract.');
-  assert.equal(reportHeadline({ status: 'passed', message: '' }), undefined);
+test('report headline is the headline of the report for a warning and a failed report only', () => {
+  assert.equal(reportHeadline({ status: 'failed', headline: '1 response does not match the contract.' }), '1 response does not match the contract.');
+  assert.equal(reportHeadline({ status: 'warning', headline: '1 response does not match the contract.' }), '1 response does not match the contract.');
+  assert.equal(reportHeadline({ status: 'passed', headline: '' }), undefined);
   assert.equal(reportHeadline(undefined), undefined);
 });
 
@@ -670,14 +692,14 @@ test('a body is shown pretty-printed as JSON, as text otherwise and as (empty) w
 });
 
 test('sidebar status is an error for a failed and a warning for a warning report, titled Mokapi', () => {
-  const message = 'Mokapi: 1 response does not match the contract.\n\nGET /api/profile\n  response.body: not valid';
-  const base = { typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', description: 'Mokapi: 1 response does not match the contract.' };
-  assert.deepEqual(sidebarStatus('a--one', { status: 'failed', message }), { ...base, value: 'status-value:error' });
-  assert.deepEqual(sidebarStatus('a--one', { status: 'warning', message }), { ...base, value: 'status-value:warning' });
+  const headline = '1 response does not match the contract.';
+  const base = { typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', description: headline };
+  assert.deepEqual(sidebarStatus('a--one', { status: 'failed', headline }), { ...base, value: 'status-value:error' });
+  assert.deepEqual(sidebarStatus('a--one', { status: 'warning', headline }), { ...base, value: 'status-value:warning' });
 });
 
 test('sidebar status is none for a passed check and without a report', () => {
-  assert.equal(sidebarStatus('a--one', { status: 'passed', message: '' }), undefined);
+  assert.equal(sidebarStatus('a--one', { status: 'passed', headline: '' }), undefined);
   assert.equal(sidebarStatus('a--one', undefined), undefined);
 });
 
@@ -737,8 +759,9 @@ test('afterEach waits for a delayed response and its validation before it report
   assert.deepEqual(context.reports[0].result.entries.map(({ status }) => status), ['invalid']);
 });
 
+const invalidHeadline = '1 response does not match the contract.';
 const invalidMessage = [
-  'Mokapi: 1 response does not match the contract.',
+  `Mokapi contract validation failed: ${invalidHeadline}`,
   '',
   'GET /api/profile?id=1 -> GET /profile (http://localhost:8080/dashboard/http/services/Profile%20API/profile/get)',
   '  response.body: required properties are missing: email',
@@ -762,7 +785,7 @@ test('afterEach in error mode adds a failed report and sends it to the panel', a
   await finished;
   assert.equal(context.reports[0].status, 'failed');
   const { renderId } = panel.actions[0];
-  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId, storyId: 'profile--valid', status: 'failed', message: invalidMessage });
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId, storyId: 'profile--valid', status: 'failed', headline: invalidHeadline });
 });
 
 test('afterEach in error mode throws the message of the invalid responses under Vitest', async (t) => {
@@ -773,20 +796,39 @@ test('afterEach in error mode throws the message of the invalid responses under 
   assert.equal(panel.actions.at(-1).type, 'report');
 });
 
-test('afterEach in todo mode sends a warning report and passes the story, also under Vitest', async (t) => {
+test('afterEach throws a MokapiContractError whose name and stack show the Mokapi message', async (t) => {
   underVitest(t);
-  const { panel, context, finished } = await runInvalidStory(t, { test: 'todo' });
-  await finished;
-  assert.equal(context.reports[0].status, 'warning');
-  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'warning', message: invalidMessage });
+  const { finished } = await runInvalidStory(t, { test: 'error' });
+  const error = await finished.then(() => undefined, (thrown) => thrown);
+  assert.ok(error instanceof MokapiContractError);
+  assert.ok(error instanceof Error);
+  assert.equal(error.name, 'MokapiContractError');
+  // Vitest prints the stack, so its first line has to carry the name too.
+  assert.match(error.stack, /^MokapiContractError: Mokapi contract validation failed: /);
 });
 
-test('afterEach sends a passed report with an empty message', async () => {
+test('the report holds the test mode of the story, so the badge of a test run result shows its tooltip', async (t) => {
+  for (const test of ['error', 'warning']) {
+    const { context, finished } = await runInvalidStory(t, { test });
+    await finished.catch(() => {});
+    assert.equal(context.reports[0].result.testMode, test);
+  }
+});
+
+test('afterEach in warning mode sends a warning report and passes the story, also under Vitest', async (t) => {
+  underVitest(t);
+  const { panel, context, finished } = await runInvalidStory(t, { test: 'warning' });
+  await finished;
+  assert.equal(context.reports[0].status, 'warning');
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'warning', headline: invalidHeadline });
+});
+
+test('afterEach sends a passed report with an empty headline', async () => {
   const panel = recorder();
   const context = testContext(fakeWorker(), failingMode);
   validationHook(context, hookOptions(panel));
   await testHook(context, hookOptions(panel));
-  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'passed', message: '' });
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'passed', headline: '' });
 });
 
 test('afterEach sends no report in off mode, with validation off or for a disabled story', async () => {
@@ -864,7 +906,8 @@ test('a validation that does not finish within 4 s fails with one notice per req
   t.mock.timers.tick(1);
   await assert.rejects(finished, {
     message: [
-      'Mokapi validation did not finish within 4 s (GET /api/profile?id=1).',
+      'Mokapi contract validation failed: Mokapi validation did not finish within 4 s (GET /api/profile?id=1).',
+      '',
       'Mokapi validation did not finish within 4 s (GET /api/orders).',
     ].join('\n'),
   });
@@ -925,8 +968,8 @@ test('the quiet window ends after 1 s even if requests keep starting, and the 4 
   await tick(t, 2999);
   t.mock.timers.tick(1);
   const lines = await finished.then(() => [], (error) => error.message.split('\n'));
-  assert.equal(lines.length, 11);
-  assert.ok(lines.every((line) => /did not finish within 4 s \(GET \/api\/stream\d+\)\.$/.test(line)), lines.join('\n'));
+  assert.equal(lines.length, 12);
+  assert.ok(lines.filter((line) => line !== '').every((line) => /did not finish within 4 s \(GET \/api\/stream\d+\)\.$/.test(line)), lines.join('\n'));
 });
 
 test('a request that starts in the quiet window times out 4 s after afterEach began', async (t) => {
@@ -957,7 +1000,7 @@ test('afterEach returns without a report when the story is torn down during the 
   assert.deepEqual(context.reports, []);
 });
 
-test('a timeout does not stop a story in todo mode', async (t) => {
+test('a timeout does not stop a story in warning mode', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const worker = fakeWorker();
   const context = testContext(worker);
@@ -1056,11 +1099,11 @@ test('afterEach of a re-render in error mode fails on the invalid entry of the m
   worker.started(getProfile(), 'mount');
   const finishedMount = testHook(mounted, hookOptions(panel));
   worker.mocked(getProfile(), jsonResponse(), 'mount');
-  await assert.rejects(finishedMount, /^Error: Mokapi: 1 response does not match the contract\./);
+  await assert.rejects(finishedMount, /^MokapiContractError: Mokapi contract validation failed: 1 response does not match the contract\./);
 
   const rerender = rerenderOf(mounted, worker, failingMode);
   validationHook(rerender, hookOptions(panel));
-  await assert.rejects(testHook(rerender, hookOptions(panel)), /^Error: Mokapi: 1 response does not match the contract\./);
+  await assert.rejects(testHook(rerender, hookOptions(panel)), /^MokapiContractError: Mokapi contract validation failed: 1 response does not match the contract\./);
   assert.equal(rerender.reports[0].status, 'failed');
 });
 
@@ -1172,15 +1215,15 @@ test('an invalid test parameter is a configuration error and the story uses defa
   const context = testContext(worker, { mokapi: { test: 'strict' } });
   validationHook(context, hookOptions(panel, 'error'));
   assert.deepEqual(panel.actions.slice(1).map(({ type, notice }) => [type, notice.kind, notice.message]), [
-    ['notice', 'config-error', "Mokapi: parameters.mokapi.test must be 'error', 'todo' or 'off'."],
+    ['notice', 'config-error', "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'."],
   ]);
-  await assert.rejects(testHook(context, hookOptions(panel, 'error')), /^Error: Mokapi: parameters\.mokapi\.test must be 'error', 'todo' or 'off'\.$/);
+  await assert.rejects(testHook(context, hookOptions(panel, 'error')), /^MokapiContractError: Mokapi contract validation failed: Mokapi: parameters\.mokapi\.test must be 'error', 'warning' or 'off'\.$/);
   assert.equal(context.reports[0].status, 'failed');
 
-  const todo = testContext(worker, { mokapi: { test: 'strict' } });
-  validationHook(todo, hookOptions(panel, 'todo'));
-  await testHook(todo, hookOptions(panel, 'todo'));
-  assert.equal(todo.reports[0].status, 'warning');
+  const warning = testContext(worker, { mokapi: { test: 'strict' } });
+  validationHook(warning, hookOptions(panel, 'warning'));
+  await testHook(warning, hookOptions(panel, 'warning'));
+  assert.equal(warning.reports[0].status, 'warning');
 });
 
 test('afterEach adds no report with validation off, for a disabled story or in off mode and never fails then', async (t) => {
@@ -1304,11 +1347,11 @@ test('panel keeps the test mode of the render and resets it with the next render
   assert.equal('testMode' in initialPanelState, false);
 });
 
-const reportOf = (renderId, status = 'failed', message = 'Mokapi: 1 response does not match the contract.') => ({ type: 'report', renderId, storyId: 'a--one', status, message });
+const reportOf = (renderId, status = 'failed', headline = '1 response does not match the contract.') => ({ type: 'report', renderId, storyId: 'a--one', status, headline });
 
 test('panel keeps the report of the current render and clears it with the next render', () => {
   const state = reduceAll(renderStarted(1), resultOf(1, 1, 'invalid'), reportOf(1));
-  assert.deepEqual(state.report, { status: 'failed', message: 'Mokapi: 1 response does not match the contract.' });
+  assert.deepEqual(state.report, { status: 'failed', headline: '1 response does not match the contract.' });
   assert.equal(state.entries.length, 1);
   assert.equal('report' in reduceAll(renderStarted(1), reportOf(1), renderStarted(2)), false);
   assert.equal('report' in initialPanelState, false);
@@ -1388,7 +1431,7 @@ test('preview registers a beforeEach that sends results to the panel channel and
   assert.equal(fetch.mock.calls[0].arguments[0], 'http://localhost:9090/api/services/http/validate');
 });
 
-test('preview registers an afterEach that fails a story with a contract error in error mode and warns in todo mode', async (t) => {
+test('preview registers an afterEach that fails a story with a contract error in error mode and warns in warning mode', async (t) => {
   underVitest(t);
   const { addons } = await import('storybook/preview-api');
   const { afterEach, beforeEach } = await import('../dist/preview.js');
@@ -1404,11 +1447,11 @@ test('preview registers an afterEach that fails a story with a contract error in
     return { context, finished };
   };
   const failing = await run({ test: 'error' });
-  await assert.rejects(failing.finished, /^Error: Mokapi: 1 response does not match the contract\./);
+  await assert.rejects(failing.finished, /^MokapiContractError: Mokapi contract validation failed: 1 response does not match the contract\./);
   assert.equal(failing.context.reports[0].status, 'failed');
-  const todo = await run({});
-  assert.equal(await todo.finished, undefined);
-  assert.equal(todo.context.reports[0].status, 'warning');
+  const warning = await run({});
+  assert.equal(await warning.finished, undefined);
+  assert.equal(warning.context.reports[0].status, 'warning');
 });
 
 test('preset adds the preview annotation and the manager entry after the existing ones', () => {
@@ -1419,7 +1462,7 @@ test('preset adds the preview annotation and the manager entry after the existin
 test('preset defines the resolved options for the preview and sets up no proxy', () => {
   const config = viteFinal({ server: { port: 6006 } }, { dashboardUrl: 'http://localhost:9090/', defaultValidation: true });
   assert.deepEqual(JSON.parse(config.define.__MOKAPI_STORYBOOK_OPTIONS__), {
-    dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'todo',
+    dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'warning',
   });
   assert.deepEqual(config.server, { port: 6006 });
   assert.equal(JSON.stringify(config).includes('proxy'), false);
@@ -1548,4 +1591,114 @@ test('a story change or another story finishing cancels the pending remount', ()
   assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), { type: 'story-changed' }, finished()), []);
   assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), finished('a--two')), []);
   assert.deepEqual(remountSteps(initialValidation('off'), switched('on'), started(), finished('a--two'), finished()), ['a--one']);
+});
+
+// The payload of addon-vitest's `test-run-completed` event (`CurrentRun`), reduced to what the addon reads.
+const mokapiReport = (status, result = { entries: [invalidEntry()], notices: [], testMode: 'warning' }) => ({ type: 'mokapi', version: 1, status, result });
+const componentTest = (storyId, value = 'status-value:success', description = '') => ({ storyId, typeId: 'storybook/component-test', value, title: 'Component tests', description });
+const testRunOf = (statuses, reports = {}) => ({ componentTestStatuses: statuses, reports, storyIds: undefined });
+
+test('a test run result of a warning report keeps its entries, notices and test mode and has the headline of the entries', () => {
+  const result = { entries: [invalidEntry()], notices: [panelNotice('timeout')], testMode: 'warning' };
+  const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('warning', result)] });
+  assert.deepEqual(testRunResults(run), {
+    'a--one': {
+      report: { status: 'warning', headline: '1 response does not match the contract.' },
+      entries: result.entries,
+      notices: result.notices,
+      testMode: 'warning',
+    },
+  });
+  assert.deepEqual(sidebarStatus('a--one', testRunResults(run)['a--one'].report), {
+    typeId: 'mokapi/validation',
+    storyId: 'a--one',
+    title: 'Mokapi',
+    description: '1 response does not match the contract.',
+    value: 'status-value:warning',
+  });
+});
+
+test('a test run result of a failed report is failed', () => {
+  const result = { entries: [], notices: [panelNotice('unreachable', 'not reachable')], testMode: 'error' };
+  const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('failed', result)] });
+  assert.deepEqual(testRunResults(run)['a--one'].report, { status: 'failed', headline: 'not reachable' });
+});
+
+test('stories that ran without a failing Mokapi report took part in the run but have no result', () => {
+  const run = testRunOf(
+    [componentTest('a--passed'), componentTest('a--none'), componentTest('a--other')],
+    { 'a--passed': [mokapiReport('passed', { entries: [], notices: [], testMode: 'error' })], 'a--other': [{ type: 'a11y', version: 1, status: 'warning', result: {} }] },
+  );
+  assert.deepEqual(ranStoryIds(run), ['a--passed', 'a--none', 'a--other']);
+  assert.deepEqual(testRunResults(run), {});
+});
+
+test('a failed story without report gets a failed result with the headline of the Mokapi error text and no entries', () => {
+  const description = [
+    'Mokapi contract validation failed: 1 response does not match the contract.',
+    '',
+    'GET /api/profile -> GET /api/profile (http://localhost:8080/dashboard/...)',
+    '    at <anonymous> (story.tsx:1:1)',
+  ].join('\n');
+  const run = testRunOf([componentTest('a--one', 'status-value:error', description)]);
+  assert.deepEqual(testRunResults(run), {
+    'a--one': { report: { status: 'failed', headline: '1 response does not match the contract.' }, entries: [], notices: [], testMode: 'error' },
+  });
+});
+
+test('a failed story with another error has no result', () => {
+  const run = testRunOf([componentTest('a--one', 'status-value:error', 'AssertionError: expected 1 to be 2')]);
+  assert.deepEqual(testRunResults(run), {});
+  assert.deepEqual(ranStoryIds(run), ['a--one']);
+});
+
+test('reports of another type or version and malformed results are ignored', () => {
+  const bad = (report) => testRunResults(testRunOf([componentTest('a--one')], { 'a--one': [report] }));
+  assert.deepEqual(bad({ ...mokapiReport('warning'), version: 2 }), {});
+  assert.deepEqual(bad({ ...mokapiReport('warning'), type: 'a11y' }), {});
+  assert.deepEqual(bad({ type: 'mokapi', version: 1, status: 'warning', result: { entries: 'x', notices: [] } }), {});
+  assert.deepEqual(bad({ type: 'mokapi', version: 1, status: 'warning', result: { entries: [] } }), {});
+  assert.deepEqual(bad({ type: 'mokapi', version: 1, status: 'warning', result: null }), {});
+  assert.deepEqual(bad({ type: 'mokapi', version: 1, status: 'unknown', result: { entries: [], notices: [] } }), {});
+});
+
+test('a result without a known test mode has none', () => {
+  const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('warning', { entries: [invalidEntry()], notices: [], testMode: 'strict' })] });
+  assert.equal('testMode' in testRunResults(run)['a--one'], false);
+});
+
+test('a test run replaces the results of the stories that ran and keeps the others', () => {
+  const warned = { report: { status: 'warning', headline: 'h' }, entries: [], notices: [], testMode: 'warning' };
+  const before = { 'a--ran': warned, 'a--ran-passed': warned, 'a--outside': warned };
+  const run = testRunOf(
+    [componentTest('a--ran'), componentTest('a--ran-passed'), componentTest('a--new')],
+    { 'a--ran': [mokapiReport('failed', { entries: [], notices: [panelNotice('timeout', 'slow')], testMode: 'error' })], 'a--new': [mokapiReport('warning')] },
+  );
+  const after = applyTestRun(before, run);
+  assert.deepEqual(Object.keys(after).sort(), ['a--new', 'a--outside', 'a--ran']);
+  assert.equal(after['a--ran'].report.headline, 'slow');
+  assert.equal(after['a--outside'], warned);
+  assert.deepEqual(Object.keys(before), ['a--ran', 'a--ran-passed', 'a--outside']);
+});
+
+test('a story forgets its test run result, the other results stay', () => {
+  const result = { report: { status: 'warning', headline: 'h' }, entries: [], notices: [] };
+  const runs = { 'a--one': result, 'a--two': result };
+  assert.deepEqual(forgetStoryRun(runs, 'a--one'), { 'a--two': result });
+  assert.equal(forgetStoryRun(runs, 'a--three'), runs);
+  assert.deepEqual(runs, { 'a--one': result, 'a--two': result });
+});
+
+test('the panel of a story shows its test run result, otherwise what the UI reported for it', () => {
+  const entry = invalidEntry();
+  const result = { report: { status: 'warning', headline: 'h' }, entries: [entry], notices: [panelNotice('timeout')], testMode: 'warning' };
+  const ui = { ...stateOf([validEntry()]), storyId: 'a--one', renderId: 3 };
+  assert.deepEqual(panelOf(ui, { 'a--one': result }, 'a--one'), {
+    storyId: 'a--one', renderId: 0, entries: [entry], notices: result.notices, testMode: 'warning', report: result.report, fromTestRun: true,
+  });
+  assert.equal(panelOf(ui, { 'a--two': result }, 'a--one'), ui);
+  assert.equal(panelOf(ui, {}, 'a--two'), initialPanelState);
+  assert.equal('testMode' in panelOf(ui, { 'a--one': { ...result, testMode: undefined } }, 'a--one'), false);
+  // A story id is no property of `Object`.
+  assert.equal(panelOf(ui, {}, 'constructor'), initialPanelState);
 });

@@ -36,10 +36,10 @@ export interface Notice {
 
 export type ReportStatus = 'passed' | 'warning' | 'failed';
 
-/** The verdict of the story's afterEach: the status and the report text (`errorMessage`, empty when passed). */
+/** The verdict of the story's afterEach: the status and the headline of the result (`headline`, empty when passed). */
 export interface Report {
   status: ReportStatus;
-  message: string;
+  headline: string;
 }
 
 // renderId is unique per mount of a story (a re-render keeps it), so late answers of an earlier mount can be recognized.
@@ -68,7 +68,7 @@ export function reducePanel(state: PanelState, action: PanelAction): PanelState 
     return { ...initialPanelState, storyId: action.storyId, renderId: action.renderId, ...(action.testMode && { testMode: action.testMode }) };
   }
   if (action.renderId !== state.renderId) return state;
-  if (action.type === 'report') return { ...state, report: { status: action.status, message: action.message } };
+  if (action.type === 'report') return { ...state, report: { status: action.status, headline: action.headline } };
   if (action.type === 'result') {
     return { ...state, entries: [...state.entries, action.entry].sort((a, b) => a.sequence - b.sequence) };
   }

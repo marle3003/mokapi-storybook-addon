@@ -31,13 +31,14 @@ import {
   initialPanelState,
   invalidCount,
   reducePanel,
-  resultsOfStory,
   type Entry,
   type MessageDetails,
   type Notice,
   type PanelAction,
   type PanelState,
+  type Report,
 } from './results.js';
+import { applyTestRun, forgetStoryRun, panelOf, ranStoryIds, type StoryPanel, type StoryRuns, type TestRunPayload } from './test-run.js';
 import { toggleState } from './toggle.js';
 import type { ResolvedAddonOptions } from './types.js';
 
@@ -51,10 +52,15 @@ const PANEL_ID = 'mokapi/validation';
 const TOGGLE_ID = 'mokapi/validation-toggle';
 const TOGGLE_NAME = 'Validate with Mokapi';
 const TEST_PROVIDER_ID = 'mokapi/test-provider';
+// The channel event of @storybook/addon-vitest (its constant STORYBOOK_ADDON_TEST_CHANNEL): it announces every
+// finished run. That package's `constants` entry is for Node, so the manager can't import it.
+const TEST_RUN_CHANNEL = 'storybook/test/channel';
 
 // The panel is only mounted while its tab is open, but the badge must count while it is closed.
 // So the results live here and both the tab title and the panel subscribe to them.
 let panelState: PanelState = initialPanelState;
+// What the last test run found out per story. The panel shows it until the UI reports a newer result.
+let testRuns: StoryRuns = {};
 // Fed by the render phases, so Rerun is right even when the panel opens while a story renders.
 let rendering: Rendering = initialRendering;
 const subscribers = new Set<() => void>();
@@ -63,6 +69,23 @@ const notifySubscribers = (): void => subscribers.forEach((notify) => notify());
 
 function receive(action: PanelAction): void {
   panelState = reducePanel(panelState, action);
+  notifySubscribers();
+}
+
+function receiveTestRun(payload: TestRunPayload): void {
+  testRuns = applyTestRun(testRuns, payload);
+  notifySubscribers();
+}
+
+function forgetTestRun(storyId: string): void {
+  const remaining = forgetStoryRun(testRuns, storyId);
+  if (remaining === testRuns) return;
+  testRuns = remaining;
+  notifySubscribers();
+}
+
+function clearTestRuns(): void {
+  testRuns = {};
   notifySubscribers();
 }
 
@@ -76,9 +99,10 @@ function subscribe(notify: () => void): () => void {
   return () => { subscribers.delete(notify); };
 }
 
-function useResultsOfSelectedStory(): PanelState {
+function useResultsOfSelectedStory(): StoryPanel {
   const state = useSyncExternalStore(subscribe, () => panelState);
-  return resultsOfStory(state, useStorybookState().storyId);
+  const runs = useSyncExternalStore(subscribe, () => testRuns);
+  return panelOf(state, runs, useStorybookState().storyId);
 }
 
 const PanelRoot = styled.div(({ theme }) => ({
@@ -136,6 +160,7 @@ const NoticeRow = styled.div<{ kind: Notice['kind'] }>(({ theme, kind }) => ({
   color: kind === 'worker-missing' ? theme.color.warning : theme.color.negative,
 }));
 const EmptyText = styled.p({ margin: 0, padding: '8px 15px' });
+const TestRunNote = styled(EmptyText)(({ theme }) => ({ color: theme.textMutedColor }));
 const EntryList = styled.ul({ margin: 0, padding: 0, listStyle: 'none' });
 // The invalid rows get the error background of failed steps in the Interactions panel. Storybook's
 // `transparentize` is no manager global, so the dark theme uses its negative color (#FF4400) at 7 % as literal.
@@ -338,16 +363,17 @@ function Panel() {
   const state = useResultsOfSelectedStory();
   const dashboardUrl = window.__MOKAPI_PANEL_OPTIONS__?.dashboardUrl;
   if (selectedPanel !== PANEL_ID || !layout.showPanel) return null;
-  if (globals.mokapiValidation !== 'on') {
+  if (globals.mokapiValidation !== 'on' && !state.fromTestRun) {
     return <PanelFrame><Hint>{`Turn on validation with the "${TOGGLE_NAME}" toggle in the toolbar.`}</Hint></PanelFrame>;
   }
   return (
     <PanelFrame>
       <Toolbar state={state} dashboardUrl={dashboardUrl} />
+      {state.fromTestRun && <TestRunNote data-testid="mokapi-test-run-note">Result of the last test run.</TestRunNote>}
       {state.notices.map((notice) => (
         <NoticeRow key={`${notice.kind}-${notice.message}`} kind={notice.kind} role="alert">{notice.message}</NoticeRow>
       ))}
-      {!state.entries.length && <EmptyText>No responses validated since this story was mounted.</EmptyText>}
+      {!state.entries.length && !state.fromTestRun && <EmptyText>No responses validated since this story was mounted.</EmptyText>}
       <EntryList role="list">
         {state.entries.map((entry) => <EntryItem key={entry.sequence} entry={entry} />)}
       </EntryList>
@@ -357,12 +383,22 @@ function Panel() {
 
 addons.register('mokapi', (api) => {
   const statusStore = experimental_getStatusStore(STATUS_TYPE_ID);
+  // A story has a Mokapi status while its latest result is a warning or a failure.
+  const updateStatuses = (results: [storyId: string, report: Report | undefined][]): void => {
+    const statuses = results.map(([storyId, report]) => ({ storyId, status: sidebarStatus(storyId, report) }));
+    statusStore.set(statuses.flatMap(({ status }) => status ?? []));
+    statusStore.unset(statuses.filter(({ status }) => !status).map(({ storyId }) => storyId));
+  };
   api.on(PANEL_EVENT, (action: PanelAction) => {
     receive(action);
-    if (action.type !== 'report') return;
-    const status = sidebarStatus(action.storyId, action);
-    if (status) statusStore.set([status]);
-    else statusStore.unset([action.storyId]);
+    // A mount that validates and a report are newer than the last test run. A mount without validation is not.
+    if (action.type === 'report' || (action.type === 'render-started' && action.testMode)) forgetTestRun(action.storyId);
+    if (action.type === 'report') updateStatuses([[action.storyId, action]]);
+  });
+  api.on(TEST_RUN_CHANNEL, ({ type, payload }: { type: string; payload: TestRunPayload }) => {
+    if (type !== 'test-run-completed') return;
+    receiveTestRun(payload);
+    updateStatuses(ranStoryIds(payload).map((storyId) => [storyId, testRuns[storyId]?.report]));
   });
   // Selecting the status in the sidebar shows the details.
   statusStore.onSelect(() => {
@@ -398,7 +434,10 @@ addons.register('mokapi', (api) => {
   // Storybook's "Clear all statuses" calls `clear` of every test provider. The provider has no run of its own.
   addons.add(TEST_PROVIDER_ID, {
     type: types.experimental_TEST_PROVIDER,
-    clear: () => statusStore.unset(),
+    clear: () => {
+      statusStore.unset();
+      clearTestRuns();
+    },
     render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
   });
   addons.add(PANEL_ID, {

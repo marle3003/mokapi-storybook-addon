@@ -1,6 +1,6 @@
 import type { MokapiAddonOptions, ResolvedAddonOptions, TestMode } from './types.js';
 
-const TEST_MODES: readonly unknown[] = ['error', 'todo', 'off'];
+const TEST_MODES: readonly unknown[] = ['error', 'warning', 'off'];
 
 export const isTestMode = (value: unknown): value is TestMode => TEST_MODES.includes(value);
 
@@ -14,7 +14,7 @@ function isHttpUrl(value: string): boolean {
 
 // Storybook passes the addon options untyped, so every option is checked.
 export function resolveOptions(options: Partial<MokapiAddonOptions> = {}): ResolvedAddonOptions {
-  const { dashboardUrl = 'http://localhost:8080', defaultValidation = false, defaultTest = 'todo' } = options;
+  const { dashboardUrl = 'http://localhost:8080', defaultValidation = false, defaultTest = 'warning' } = options;
   if (typeof dashboardUrl !== 'string' || !isHttpUrl(dashboardUrl)) {
     throw new Error('Mokapi: dashboardUrl must be an HTTP(S) URL.');
   }
@@ -22,7 +22,7 @@ export function resolveOptions(options: Partial<MokapiAddonOptions> = {}): Resol
     throw new Error('Mokapi: defaultValidation must be true or false.');
   }
   if (!isTestMode(defaultTest)) {
-    throw new Error("Mokapi: defaultTest must be 'error', 'todo' or 'off'.");
+    throw new Error("Mokapi: defaultTest must be 'error', 'warning' or 'off'.");
   }
   return { dashboardUrl: dashboardUrl.replace(/\/+$/, ''), defaultValidation, defaultTest };
 }

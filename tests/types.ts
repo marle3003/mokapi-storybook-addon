@@ -16,7 +16,7 @@ const withApi: Parameters = { mokapi: { api: 'Profile API' } };
 void withApi;
 const disabled: Parameters = { mokapi: { disable: true } };
 void disabled;
-const withTest: Parameters = { mokapi: { test: 'todo' } };
+const withTest: Parameters = { mokapi: { test: 'warning' } };
 void withTest;
 const empty: Parameters = { mokapi: {} };
 void empty;
@@ -39,12 +39,18 @@ void withRoutes;
 // @ts-expect-error disable is a boolean.
 const stringDisable: Parameters = { mokapi: { disable: 'yes' } };
 void stringDisable;
-// @ts-expect-error defaultTest is 'error', 'todo' or 'off'.
+// @ts-expect-error defaultTest is 'error', 'warning' or 'off'.
 const strictDefaultTest: MokapiAddonOptions = { defaultTest: 'strict' };
 void strictDefaultTest;
-// @ts-expect-error test is 'error', 'todo' or 'off'.
+// @ts-expect-error test is 'error', 'warning' or 'off'.
 const strictTest: Parameters = { mokapi: { test: 'strict' } };
 void strictTest;
+// @ts-expect-error The test mode todo was renamed to warning.
+const todoDefaultTest: MokapiAddonOptions = { defaultTest: 'todo' };
+void todoDefaultTest;
+// @ts-expect-error The test mode todo was renamed to warning.
+const todoTest: Parameters = { mokapi: { test: 'todo' } };
+void todoTest;
 // @ts-expect-error TestMode is a union of strings, not a boolean.
 const booleanTestMode: TestMode = true;
 void booleanTestMode;

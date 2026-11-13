@@ -15,8 +15,8 @@ export const ErrorInvalid = {
   parameters: { mokapi: { test: 'error' }, msw: { handlers: [profileHandler(invalidProfile)] } },
 };
 
-export const TodoInvalid = {
-  parameters: { mokapi: { test: 'todo' }, msw: { handlers: [profileHandler(invalidProfile)] } },
+export const WarningInvalid = {
+  parameters: { mokapi: { test: 'warning' }, msw: { handlers: [profileHandler(invalidProfile)] } },
 };
 
 export const OffInvalid = {

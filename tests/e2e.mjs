@@ -17,7 +17,7 @@ const VALIDATE_PATH = '/api/services/http/validate';
 const TOGGLE_NAME = 'Validate with Mokapi';
 const TEST_MODE_TEXTS = {
   error: 'Test mode: error. Contract errors make this story fail.',
-  todo: 'Test mode: todo. Contract errors are reported as warnings, the story stays green.',
+  warning: 'Test mode: warning. Contract errors are reported as warnings, the story stays green.',
   off: 'Test mode: off. Contract errors are shown here only.',
 };
 const TOGGLE_TOOLTIPS = {
@@ -719,7 +719,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await page.getByTestId('mokapi-operation').count(), 0);
     });
 
-    for (const [id, mode] of [['profile--error-invalid', 'error'], ['profile--todo-invalid', 'todo']]) {
+    for (const [id, mode] of [['profile--error-invalid', 'error'], ['profile--warning-invalid', 'warning']]) {
       await scenario(`the badge tooltip shows the test mode ${mode} of the story`, async (page) => {
         await openValidated(page, id);
         await reportBadge(page).waitFor();
@@ -740,8 +740,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     await scenario('an invalid test parameter shows the default test mode and a configuration notice', async (page) => {
       await openValidated(page, 'profile--invalid-test-parameter');
       await reportBadge(page).waitFor();
-      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.todo);
-      await notice(page, "Mokapi: parameters.mokapi.test must be 'error', 'todo' or 'off'.").waitFor();
+      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.warning);
+      await notice(page, "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.").waitFor();
       await assertStoryStaysGreen(page);
     });
 
@@ -772,11 +772,11 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     await scenario('the badge shows the report of the test mode, with the headline for warnings and failures only', async (page) => {
       await openValidated(page, 'profile--error-invalid');
       await showsText(reportBadge(page), 'FAIL');
-      await showsText(reportHeadline(page), 'Mokapi: 1 response does not match the contract.');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
 
-      await openValidated(page, 'profile--todo-invalid');
+      await openValidated(page, 'profile--warning-invalid');
       await showsText(reportBadge(page), 'WARN');
-      await showsText(reportHeadline(page), 'Mokapi: 1 response does not match the contract.');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
 
       await openValidated(page, 'profile--error-valid');
       await showsText(reportBadge(page), 'PASS');
@@ -924,12 +924,12 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     await scenario('a story with an error or a warning gets a Mokapi status in the sidebar, a passed one none', async (page) => {
       await openWithClearedStatuses(page, 'profile--error-invalid');
-      await showsText(reportHeadline(page), 'Mokapi: 1 response does not match the contract.');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
       await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
 
-      await openValidated(page, 'profile--todo-invalid');
+      await openValidated(page, 'profile--warning-invalid');
       await showsText(reportBadge(page), 'WARN');
-      await assertSidebarStatus(page, 'profile--todo-invalid', 'Warning');
+      await assertSidebarStatus(page, 'profile--warning-invalid', 'Warning');
 
       // A passed story has no status. That a passed check removes the status of an earlier failing run
       // of the same story is not covered here: no fixture story changes its verdict between runs.
@@ -946,7 +946,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     await scenario('the Mokapi status stays when the story is switched and a story without validation gets none', async (page) => {
       await openWithClearedStatuses(page, 'profile--error-invalid');
-      await showsText(reportHeadline(page), 'Mokapi: 1 response does not match the contract.');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
       await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
       await page.locator('[id="profile--error-valid"]').click();
       await showsText(reportBadge(page), 'PASS');
@@ -966,13 +966,13 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await sidebarRow(page, 'profile--error-invalid').getByRole('button', { name: 'Open context menu' }).click();
       await page.getByLabel('Test status for Mokapi: status-value:error').first().click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
-      await showsText(reportHeadline(page), 'Mokapi: 1 response does not match the contract.');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
     });
 
     await scenario('Clear all statuses removes the Mokapi statuses and the Run tests widget names Mokapi in one line', async (page) => {
       await openWithClearedStatuses(page, 'profile--error-invalid');
       // The headline is this render's report: the status is set after it, so Clear can't be overtaken.
-      await showsText(reportHeadline(page), 'Mokapi: 1 response does not match the contract.');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
       await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
 
       await page.getByRole('button', { name: 'Expand testing module' }).click();
@@ -982,9 +982,140 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertNoSidebarStatus(page, 'profile--error-invalid');
     });
 
+    // What addon-vitest's manager publishes when a run is over (`CurrentRun`), reduced to what the addon reads.
+    // A real run can't be started from here, so the scenario emits the event itself.
+    const testRunEvent = () => {
+      const operation = { api: 'Profile API', method: 'GET', path: '/api/profile' };
+      const entry = {
+        sequence: 1,
+        time: Date.now(),
+        method: 'GET',
+        url: '/api/profile',
+        statusCode: 200,
+        status: 'invalid',
+        errors: [{ location: 'response.body', message: 'required properties are missing: email' }],
+        operation,
+        operationUrl: dashboardOperationUrl(dashboard, 'Profile%20API/api/profile/get'),
+        request: { headers: {}, body: '', truncated: false },
+        response: { headers: { 'content-type': 'application/json' }, body: '{"name":"Jane Doe"}', truncated: false },
+      };
+      const componentTestStatus = (storyId, value, description = '') =>
+        ({ storyId, typeId: 'storybook/component-test', value, title: 'Component tests', description });
+      return {
+        type: 'test-run-completed',
+        // A complete CurrentRun of addon-vitest: Storybook's own listeners on this
+        // channel read e.g. `payload.config.a11y`.
+        payload: {
+          triggeredBy: 'run-all',
+          config: { coverage: false, a11y: false },
+          a11yStatuses: [],
+          componentTestCount: { success: 2, error: 1 },
+          a11yCount: { success: 0, warning: 0, error: 0 },
+          a11yReports: {},
+          totalTestCount: 3,
+          storyIds: undefined,
+          startedAt: 0,
+          finishedAt: 1,
+          unhandledErrors: [],
+          coverageSummary: undefined,
+          reports: {
+            'profile--warning-invalid': [{ type: 'mokapi', version: 1, status: 'warning', result: { entries: [entry], notices: [], testMode: 'warning' } }],
+          },
+          componentTestStatuses: [
+            componentTestStatus('profile--warning-invalid', 'status-value:success'),
+            // A failed story has no report: the run only knows the error text.
+            componentTestStatus(
+              'profile--error-invalid',
+              'status-value:error',
+              'Mokapi contract validation failed: 1 response does not match the contract.\n\nGET /api/profile\n    at <anonymous> (story.tsx:1:1)',
+            ),
+            componentTestStatus('profile--error-mixed', 'status-value:success'),
+          ],
+        },
+      };
+    };
+    const emitTestRun = (page) => page.evaluate(
+      (event) => window.__STORYBOOK_ADDONS_CHANNEL__.emit('storybook/test/channel', event),
+      testRunEvent(),
+    );
+    const testRunNote = (page) => page.getByTestId('mokapi-test-run-note');
+
+    await scenario('after a test run the stories of the run get Mokapi statuses and the panel shows the run result', async (page) => {
+      const [warned, failed, passedInRun, outsideRun] = ['profile--warning-invalid', 'profile--error-invalid', 'profile--error-mixed', 'profile--invalid'];
+      await openStory(page, validatingStorybook.url, { id: 'profile--error-valid' });
+      await finishedStory(page);
+      await clearAllStatusesButton(page).click({ timeout: 2000 }).catch(() => {});
+      await assertNoSidebarStatus(page, warned);
+      await assertNoSidebarStatus(page, failed);
+
+      // Two stories get a status from the Storybook UI before the run.
+      await page.locator(`[id="${passedInRun}"]`).click();
+      await assertSidebarStatus(page, passedInRun, 'Error');
+      await page.locator(`[id="${outsideRun}"]`).click();
+      await assertSidebarStatus(page, outsideRun, 'Warning');
+
+      await emitTestRun(page);
+      await assertSidebarStatus(page, warned, 'Warning');
+      await assertSidebarStatus(page, failed, 'Error');
+      await assertNoSidebarStatus(page, passedInRun);
+      await assertSidebarStatus(page, outsideRun, 'Warning');
+
+      assert.equal(await page.getByRole('tab', { name: /^Mokapi/, selected: true }).count(), 0);
+      await sidebarRow(page, warned).hover();
+      await sidebarRow(page, warned).getByRole('button', { name: 'Open context menu' }).click();
+      await page.getByLabel('Test status for Mokapi: status-value:warning').first().click();
+      await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
+    });
+
+    await scenario('the panel shows the result of the last test run with validation off, a newer result replaces it', async (page) => {
+      const [warned, failed] = ['profile--warning-invalid', 'profile--error-invalid'];
+      // The manager forgets the run results with the page, so every step emits the event itself.
+      await page.goto(`${validatingStorybook.url}/?path=/story/${warned}&globals=mokapiValidation:off`);
+      await toggleButton(page, 'off').waitFor();
+      await waitForFinishedRender(page);
+      await openMokapiPanel(page);
+      await page.getByText(/Turn on validation/).waitFor();
+
+      await emitTestRun(page);
+      await showsText(testRunNote(page), 'Result of the last test run.');
+      await showsText(reportBadge(page), 'WARN');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
+      await entries(page, 'invalid').waitFor();
+      assert.equal(await page.getByText(/Turn on validation/).count(), 0);
+
+      // A failed story has no entries in the run, only the error text.
+      await page.locator(`[id="${failed}"]`).click();
+      await showsText(testRunNote(page), 'Result of the last test run.');
+      await showsText(reportBadge(page), 'FAIL');
+      await showsText(reportHeadline(page), '1 response does not match the contract.');
+      assert.equal(await entries(page).count(), 0);
+
+      await page.locator(`[id="${warned}"]`).click();
+      await showsText(testRunNote(page), 'Result of the last test run.');
+      await waitForFinishedRender(page);
+      await switchValidationAndWait(page, 'on');
+      await entries(page, 'invalid').waitFor();
+      await showsText(reportBadge(page), 'WARN');
+      assert.equal(await testRunNote(page).count(), 0);
+
+      await waitForFinishedRender(page);
+      await switchValidationAndWait(page, 'off');
+      await page.getByText(/Turn on validation/).waitFor();
+      assert.equal(await testRunNote(page).count(), 0);
+
+      await emitTestRun(page);
+      await showsText(testRunNote(page), 'Result of the last test run.');
+      await assertSidebarStatus(page, warned, 'Warning');
+      await clearAllStatusesButton(page).click();
+      await assertNoSidebarStatus(page, warned);
+      await assertNoSidebarStatus(page, failed);
+      await page.getByText(/Turn on validation/).waitFor();
+      assert.equal(await testRunNote(page).count(), 0);
+    });
+
     await scenario('with test error a response that does not match the contract fails the story', async (page) => {
       await openValidated(page, 'profile--error-invalid');
-      await assertStoryFails(page, /^Mokapi: 1 response does not match the contract\.$/);
+      await assertStoryFails(page, /^1 response does not match the contract\.$/);
       // The details are in the entry.
       const url = escapeRegExp(dashboardOperationUrl(dashboard, 'Profile%20API/api/profile/get'));
       await entries(page, 'invalid').waitFor();
@@ -1012,7 +1143,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     await scenario('with test error a story that waits for its response and its validation still fails', async (page) => {
       await openValidated(page, 'profile--error-delayed');
-      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await assertStoryFails(page, /1 response does not match the contract\./);
     });
 
     await scenario('with test error a response that never comes fails the story after 4 s with a timeout notice', async (page) => {
@@ -1038,8 +1169,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.deepEqual(mokapiReports(await assertStoryStaysGreen(page)), []);
     });
 
-    await scenario('with test todo the contract error stays green and is reported as a warning', async (page) => {
-      await openValidated(page, 'profile--todo-invalid');
+    await scenario('with test warning the contract error stays green and is reported as a warning', async (page) => {
+      await openValidated(page, 'profile--warning-invalid');
       const [report, ...others] = mokapiReports(await assertStoryStaysGreen(page));
       assert.equal(others.length, 0);
       assert.equal(report.status, 'warning');
@@ -1060,7 +1191,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     await scenario('switching validation on counts only the render after the remount', async (page) => {
       await openStory(page, storybook.url, { id: 'profile--error-invalid', validation: true });
       await openMokapiPanel(page);
-      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await assertStoryFails(page, /1 response does not match the contract\./);
       assert.equal(await entries(page, 'invalid').count(), 1);
     });
 
@@ -1069,7 +1200,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await page.goto(`${storybook.url}/?path=/story/profile--error-invalid&globals=mokapiValidation:on;theme:light`);
       await toggleButton(page, 'on').waitFor();
       await openMokapiPanel(page);
-      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await assertStoryFails(page, /1 response does not match the contract\./);
       await entries(page, 'invalid').waitFor();
 
       const preview = page.frame({ name: 'storybook-preview-iframe' });
@@ -1077,7 +1208,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await page.evaluate(() => window.__STORYBOOK_ADDONS_CHANNEL__.emit('updateGlobals', { globals: { theme: 'dark' } }));
       await preview.waitForFunction((count) => window.__storyFinished.length > count, finished);
 
-      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await assertStoryFails(page, /1 response does not match the contract\./);
       assert.equal(await entries(page, 'invalid').count(), 1);
       assert.equal(await page.getByText(/No responses validated/).count(), 0);
     });
@@ -1093,7 +1224,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     });
 
     await t.test('Vitest fails stories with contract errors', { timeout: 180000 }, async () => {
-      const storyNames = ['ErrorInvalid', 'ErrorNeverAnswers', 'ErrorValid', 'TodoInvalid', 'OffInvalid'];
+      const storyNames = ['ErrorInvalid', 'ErrorNeverAnswers', 'ErrorValid', 'WarningInvalid', 'OffInvalid'];
       const story = await runStoriesWithVitest(
         { MOKAPI_DASHBOARD: dashboard, MOKAPI_DEFAULT_VALIDATION: 'true' },
         join(directory, 'vitest.json'),
@@ -1101,16 +1232,16 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       );
       const failures = (name) => story(name).failureMessages.join('\n');
       story('ErrorInvalid').expect('failed');
-      assert.match(failures('ErrorInvalid'), /Mokapi: 1 response does not match the contract\./);
+      assert.match(failures('ErrorInvalid'), /MokapiContractError: Mokapi contract validation failed: 1 response does not match the contract\./);
       // Vitest's own timeout would say "Test timed out", so this shows the addon's limit fits into the default.
       story('ErrorNeverAnswers').expect('failed');
       assert.match(failures('ErrorNeverAnswers'), /Mokapi validation did not finish within 4 s \(GET \/api\/profile\)\./);
-      for (const name of ['ErrorValid', 'TodoInvalid', 'OffInvalid']) story(name).expect('passed');
+      for (const name of ['ErrorValid', 'WarningInvalid', 'OffInvalid']) story(name).expect('passed');
     });
 
     await scenario('defaultTest error fails a story without its own test parameter', async (page) => {
       await openValidated(page, 'profile--invalid', failingStorybook);
-      await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
+      await assertStoryFails(page, /1 response does not match the contract\./);
       await reportBadge(page).waitFor();
       await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
     });

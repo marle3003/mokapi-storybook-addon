@@ -1,5 +1,6 @@
 import {
   errorMessage,
+  headline,
   INVALID_TEST_PARAMETER_MESSAGE,
   operationUrl,
   QUIET_WINDOW_MAX_MS,
@@ -257,6 +258,11 @@ const untilAborted = (abortSignal: AbortSignal): Promise<Outcome> => new Promise
   abortSignal.addEventListener('abort', () => resolve('aborted'), { once: true });
 });
 
+// Vitest prints `stack` for a failed test, and V8 writes its header when the error is constructed, so the name has to
+// be on the prototype already then.
+export class MokapiContractError extends Error {}
+MokapiContractError.prototype.name = 'MokapiContractError';
+
 // addon-vitest runs the stories in Vitest's browser mode, where Vitest sets this global (Storybook's own
 // `isTestEnvironment` checks it too). Vitest fails a test only on a thrown error, not on a failed report.
 const isVitestBrowserRun = (): boolean => (globalThis as { __vitest_browser__?: unknown }).__vitest_browser__ === true;
@@ -291,9 +297,8 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
   }
 
   const status = reportStatus(render.state, render.mode);
-  const message = errorMessage(render.state);
   const { entries, notices } = render.state;
-  context.reporting.addReport({ type: 'mokapi', version: 1, status, result: { entries, notices } });
-  announce(render, options.emit, { type: 'report', renderId: render.renderId, storyId: context.id, status, message });
-  if (status === 'failed' && isVitestBrowserRun()) throw new Error(message);
+  context.reporting.addReport({ type: 'mokapi', version: 1, status, result: { entries, notices, testMode: render.mode } });
+  announce(render, options.emit, { type: 'report', renderId: render.renderId, storyId: context.id, status, headline: headline(render.state) });
+  if (status === 'failed' && isVitestBrowserRun()) throw new MokapiContractError(errorMessage(render.state));
 }

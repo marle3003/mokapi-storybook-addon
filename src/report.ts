@@ -19,7 +19,7 @@ export function operationUrl(dashboardUrl: string, { api, method, path }: Operat
   return `${dashboardUrl}/dashboard/http/services/${enc(api)}/${segments}/${method.toLowerCase()}`;
 }
 
-export const INVALID_TEST_PARAMETER_MESSAGE = "Mokapi: parameters.mokapi.test must be 'error', 'todo' or 'off'.";
+export const INVALID_TEST_PARAMETER_MESSAGE = "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.";
 
 // `request` is the method and path with query, e.g. `GET /api/profile/1`.
 export const timeoutMessage = (request: string): string =>
@@ -33,7 +33,7 @@ export function resolveTestMode(parameter: unknown, defaultTest: TestMode): { mo
 
 const TEST_MODE_TEXTS: Record<TestMode, string> = {
   error: 'Test mode: error. Contract errors make this story fail.',
-  todo: 'Test mode: todo. Contract errors are reported as warnings, the story stays green.',
+  warning: 'Test mode: warning. Contract errors are reported as warnings, the story stays green.',
   off: 'Test mode: off. Contract errors are shown here only.',
 };
 
@@ -43,10 +43,12 @@ export const testModeText = (mode: TestMode): string => TEST_MODE_TEXTS[mode];
 // would get a warning on every story otherwise.
 const FAILING_NOTICES: readonly Notice['kind'][] = ['unreachable', 'endpoint-missing', 'config-error', 'timeout'];
 
-const invalidEntries = ({ entries }: PanelState): Entry[] => entries.filter(({ status }) => status === 'invalid');
-const failingNotices = ({ notices }: PanelState): Notice[] => notices.filter(({ kind }) => FAILING_NOTICES.includes(kind));
+type Results = Pick<PanelState, 'entries' | 'notices'>;
 
-export function reportStatus(state: PanelState, mode: TestMode): ReportStatus {
+const invalidEntries = ({ entries }: Results): Entry[] => entries.filter(({ status }) => status === 'invalid');
+const failingNotices = ({ notices }: Results): Notice[] => notices.filter(({ kind }) => FAILING_NOTICES.includes(kind));
+
+export function reportStatus(state: Results, mode: TestMode): ReportStatus {
   if (invalidEntries(state).length === 0 && failingNotices(state).length === 0) return 'passed';
   return mode === 'error' ? 'failed' : 'warning';
 }
@@ -56,12 +58,24 @@ function describeEntry({ method, url, operation, operationUrl, errors }: Entry):
   return [`${method} ${url}${matched}`, ...errors.map(({ location, message }) => `  ${location}: ${message}`)];
 }
 
-// The headline counts the invalid responses only, the other failing results follow with their panel text.
-export function errorMessage(state: PanelState): string {
+// The panel, the sidebar status and the error show this headline. It counts the invalid responses; without one the
+// first failing notice speaks for itself. Empty when nothing fails.
+export function headline(state: Results): string {
   const invalid = invalidEntries(state);
-  const verb = invalid.length === 1 ? 'response does' : 'responses do';
-  const headline = invalid.length === 0 ? [] : [`Mokapi: ${invalid.length} ${verb} not match the contract.`, ''];
-  return [...headline, ...invalid.flatMap(describeEntry), ...failingNotices(state).map(({ message }) => message)].join('\n');
+  if (invalid.length === 0) return failingNotices(state)[0]?.message ?? '';
+  return `${invalid.length} ${invalid.length === 1 ? 'response does' : 'responses do'} not match the contract.`;
+}
+
+// A failed test names Mokapi with this text, which also tells Mokapi's failure from any other in a test run.
+export const CONTRACT_ERROR_PREFIX = 'Mokapi contract validation failed: ';
+
+// Thrown under Vitest, which prints this text for the failed test: the headline comes first, the details follow.
+export function errorMessage(state: Results): string {
+  const invalid = invalidEntries(state);
+  const notices = failingNotices(state).map(({ message }) => message);
+  // The first notice is the headline when no response is invalid.
+  const details = [...invalid.flatMap(describeEntry), ...(invalid.length === 0 ? notices.slice(1) : notices)];
+  return [`${CONTRACT_ERROR_PREFIX}${headline(state)}`, ...(details.length === 0 ? [] : ['', ...details])].join('\n');
 }
 
 // The labels of the entry kinds, in the order the panel counts them.
@@ -82,12 +96,9 @@ export function countLine(entries: Entry[]): string | undefined {
   return [validated, ...kinds].join(', ');
 }
 
-// The headline is the first line of the message; the entries below show the details. Storybook's status description and the panel use it.
-const headline = (message: string): string => message.split('\n')[0];
-
 // A passed report has nothing to say beyond its badge.
 export const reportHeadline = (report: Report | undefined): string | undefined =>
-  report === undefined || report.status === 'passed' ? undefined : headline(report.message);
+  report === undefined || report.status === 'passed' ? undefined : report.headline;
 
 // The names are Storybook's theme colors, as the Interactions panel's status badge uses them.
 export interface ReportBadge {
@@ -192,6 +203,6 @@ export function sidebarStatus(storyId: string, report: Report | undefined): Stat
     storyId,
     title: 'Mokapi',
     value: report.status === 'failed' ? 'status-value:error' : 'status-value:warning',
-    description: headline(report.message),
+    description: report.headline,
   };
 }
