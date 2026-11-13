@@ -303,7 +303,24 @@ opens in a new tab. Hover the link to see the operation, for example
 `GET /profile/{id}`. Entries that are not in the contract or not reachable have
 no link.
 
-Under each entry, **Request / Response** is collapsed. Click it to see the
+The status is a badge with the status code, colored by its class:
+
+| Status  | Color  |
+|---------|--------|
+| 2xx     | green  |
+| 3xx     | blue   |
+| 4xx     | orange |
+| 5xx     | red    |
+| other   | gray   |
+
+Hover the badge to see the status text, for example `Not Found` for 404. A code
+without a known text shows its class instead: Informational, Success, Redirect,
+Client error or Server error. For a code outside 100-599 (for example `0` for
+`HttpResponse.error()`), the tooltip shows only the code. The time is
+`HH:mm:ss` in the time zone of your browser.
+
+Under each entry, **Request / Response** is collapsed, and its **Response**
+heading shows the same badge. Open it to see the
 headers and the body of the request and of the response as the addon sent them
 to Mokapi. A JSON body is pretty-printed, and an empty body shows `(empty)`. The
 panel shows at most 10,000 characters of a body and adds

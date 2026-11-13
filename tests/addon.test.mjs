@@ -13,12 +13,16 @@ import {
   countLine,
   errorMessage,
   formatBody,
+  formatTime,
   operationUrl,
   reportBadge,
   reportHeadline,
   reportStatus,
   resolveTestMode,
   sidebarStatus,
+  statusColor,
+  statusLabel,
+  statusText,
   testModeText,
   truncateBody,
 } from '../dist/report.js';
@@ -581,6 +585,46 @@ test('badge maps the report status to PASS, WARN and FAIL', () => {
   assert.deepEqual(reportBadge('error', { status: 'passed', message: '' }), { label: 'PASS', status: 'positive' });
   assert.deepEqual(reportBadge('todo', { status: 'warning', message: 'x' }), { label: 'WARN', status: 'warning' });
   assert.deepEqual(reportBadge('error', { status: 'failed', message: 'x' }), { label: 'FAIL', status: 'negative' });
+});
+
+test('status color follows the status group, anything outside 100-599 is gray', () => {
+  for (const code of [0, 99, 100, 199, 600, -1, NaN, 200.5]) assert.equal(statusColor(code), 'mediumdark', String(code));
+  for (const code of [200, 299]) assert.equal(statusColor(code), 'positive', String(code));
+  for (const code of [300, 399]) assert.equal(statusColor(code), 'secondary', String(code));
+  for (const code of [400, 499]) assert.equal(statusColor(code), 'warning', String(code));
+  for (const code of [500, 599]) assert.equal(statusColor(code), 'negative', String(code));
+});
+
+test('status text comes from the table, then from the group name', () => {
+  const known = {
+    100: 'Continue', 200: 'OK', 301: 'Moved Permanently', 404: 'Not Found', 500: 'Internal Server Error',
+    413: 'Content Too Large', 422: 'Unprocessable Content',
+    418: "I'm a teapot", 425: 'Too Early', 429: 'Too Many Requests',
+    431: 'Request Header Fields Too Large', 511: 'Network Authentication Required',
+  };
+  for (const [code, text] of Object.entries(known)) assert.equal(statusText(Number(code)), text, code);
+  const groups = { 199: 'Informational', 299: 'Success', 399: 'Redirect', 451: 'Client error', 499: 'Client error', 599: 'Server error' };
+  for (const [code, text] of Object.entries(groups)) assert.equal(statusText(Number(code)), text, code);
+  for (const code of [0, 99, 600, -1, NaN]) assert.equal(statusText(code), undefined, String(code));
+});
+
+test('status label joins the code and its text, the bare code stays without one', () => {
+  assert.equal(statusLabel(200), '200 OK');
+  assert.equal(statusLabel(404), '404 Not Found');
+  assert.equal(statusLabel(299), '299 Success');
+  assert.equal(statusLabel(0), '0');
+  assert.equal(statusLabel(600), '600');
+});
+
+test('time is formatted as HH:mm:ss in local time, whatever the locale', () => {
+  const local = (...time) => new Date(2026, 0, 1, ...time).getTime();
+  assert.equal(formatTime(local(0, 0, 0)), '00:00:00');
+  assert.equal(formatTime(local(12, 0, 0)), '12:00:00');
+  assert.equal(formatTime(local(0, 5, 9)), '00:05:09');
+  assert.equal(formatTime(local(14, 5, 9)), '14:05:09');
+  assert.equal(formatTime(local(1, 2, 3)), '01:02:03');
+  assert.equal(formatTime(local(23, 59, 59)), '23:59:59');
+  assert.equal(formatTime(local(9, 5, 9, 999)), '09:05:09');
 });
 
 test('headline is the first line of the message for a warning and a failed report only', () => {

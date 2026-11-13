@@ -12,12 +12,17 @@ import {
   BODY_LIMIT,
   countLine,
   formatBody,
+  formatTime,
   KIND_LABELS,
   reportBadge,
   reportHeadline,
   sidebarStatus,
+  statusColor,
+  statusLabel,
+  statusText,
   STATUS_TYPE_ID,
   testModeText,
+  type BadgeColor,
   type ReportBadge,
 } from './report.js';
 import {
@@ -90,7 +95,7 @@ const Title = styled.span({ display: 'inline-flex', gap: 6, alignItems: 'center'
 const ProviderLabel = styled.div({ padding: '8px 12px' });
 
 // Same look as the status badge of Storybook's Interactions panel, which is not exported.
-const StatusBadge = styled.span<{ status: ReportBadge['status'] }>(({ theme, status }) => ({
+const StatusBadge = styled.span<{ status: BadgeColor }>(({ theme, status }) => ({
   display: 'inline-block',
   padding: '4px 6px 4px 8px',
   borderRadius: 4,
@@ -103,6 +108,8 @@ const StatusBadge = styled.span<{ status: ReportBadge['status'] }>(({ theme, sta
   minWidth: 65,
   textAlign: 'center',
 }));
+// Three digits next to the 12 px row text: same color, radius and weight, but no button look.
+const CodeBadge = styled(StatusBadge)({ textTransform: 'none', letterSpacing: 0, minWidth: 0, padding: '1px 6px' });
 const ToolbarRow = styled.div(({ theme }) => ({
   display: 'flex',
   flexWrap: 'wrap',
@@ -135,7 +142,8 @@ const EntryKind = styled.strong<{ status: Entry['status'] }>(({ theme, status })
   color: status === 'valid' ? theme.color.positive : status === 'invalid' ? theme.color.negative : theme.color.mediumdark,
 }));
 const EntryUrl = styled.span(({ theme }) => ({ fontFamily: theme.typography.fonts.mono }));
-const EntryMeta = styled.span(({ theme }) => ({ marginLeft: 'auto', whiteSpace: 'nowrap', color: theme.textMutedColor }));
+const EntryMeta = styled.span({ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto', whiteSpace: 'nowrap' });
+const EntryTime = styled.span(({ theme }) => ({ color: theme.textMutedColor }));
 const Errors = styled.ul({ margin: '6px 0 0', paddingLeft: 40 });
 const EntryMessage = styled.div({ paddingLeft: 24 });
 const Details = styled.details({ marginTop: 6, paddingLeft: 24 });
@@ -167,7 +175,25 @@ function EntryIcon({ status }: { status: Entry['status'] }) {
 const headerLines = (headers: Record<string, string>): string =>
   Object.entries(headers).map(([name, value]) => `${name}: ${value}`).join('\n');
 
-function Message({ title, summary, details }: { title: string; summary: string; details?: MessageDetails }) {
+function BadgeTooltip({ note, children }: { note: string; children: ReactNode }) {
+  return (
+    <WithTooltip hasChrome={false} placement="top" trigger="hover" tooltip={<TooltipNote note={note} />}>
+      {children}
+    </WithTooltip>
+  );
+}
+
+function HttpStatusBadge({ statusCode }: { statusCode: number }) {
+  return (
+    <BadgeTooltip note={statusText(statusCode) ?? String(statusCode)}>
+      <CodeBadge status={statusColor(statusCode)} aria-label={statusLabel(statusCode)} data-testid="mokapi-status-badge">
+        {statusCode}
+      </CodeBadge>
+    </BadgeTooltip>
+  );
+}
+
+function Message({ title, summary, details }: { title: string; summary: ReactNode; details?: MessageDetails }) {
   if (!details) return null;
   return (
     <div>
@@ -201,7 +227,10 @@ function EntryItem({ entry }: { entry: Entry }) {
             </Link>
           ) : request}
         </EntryUrl>
-        <EntryMeta>{`${entry.statusCode} ${new Date(entry.time).toLocaleTimeString()}`}</EntryMeta>
+        <EntryMeta data-testid="mokapi-entry-meta">
+          <HttpStatusBadge statusCode={entry.statusCode} />
+          <EntryTime data-testid="mokapi-entry-time">{formatTime(entry.time)}</EntryTime>
+        </EntryMeta>
       </EntryHeader>
       {entry.message && <EntryMessage>{entry.message}</EntryMessage>}
       {entry.errors.length > 0 && (
@@ -215,7 +244,7 @@ function EntryItem({ entry }: { entry: Entry }) {
         <Details data-testid="mokapi-details">
           <Summary>Request / Response</Summary>
           <Message title="Request" summary={request} details={entry.request} />
-          <Message title="Response" summary={String(entry.statusCode)} details={entry.response} />
+          <Message title="Response" summary={<HttpStatusBadge statusCode={entry.statusCode} />} details={entry.response} />
         </Details>
       )}
     </EntryRow>
@@ -224,9 +253,9 @@ function EntryItem({ entry }: { entry: Entry }) {
 
 function ReportStatusBadge({ badge, testMode }: { badge: ReportBadge; testMode: NonNullable<PanelState['testMode']> }) {
   return (
-    <WithTooltip hasChrome={false} placement="top" trigger="hover" tooltip={<TooltipNote note={testModeText(testMode)} />}>
+    <BadgeTooltip note={testModeText(testMode)}>
       <StatusBadge status={badge.status} data-testid="mokapi-report-badge">{badge.label}</StatusBadge>
-    </WithTooltip>
+    </BadgeTooltip>
   );
 }
 

@@ -107,6 +107,53 @@ export function reportBadge(testMode: TestMode | undefined, report: Report | und
   return report === undefined ? { label: 'WAIT', status: 'mediumdark' } : REPORT_BADGES[report.status];
 }
 
+// The names are Storybook's theme colors. The groups are the ones of the dashboard's `getClassByStatusCode`.
+export type BadgeColor = 'positive' | 'secondary' | 'warning' | 'negative' | 'mediumdark';
+
+// Keyed by the hundreds digit of the status code.
+const STATUS_GROUPS: Record<number, { name: string; color: BadgeColor }> = {
+  1: { name: 'Informational', color: 'mediumdark' },
+  2: { name: 'Success', color: 'positive' },
+  3: { name: 'Redirect', color: 'secondary' },
+  4: { name: 'Client error', color: 'warning' },
+  5: { name: 'Server error', color: 'negative' },
+};
+
+// The codes of RFC 9110 (with its names) and the common ones of other RFCs.
+const STATUS_TEXTS: Record<number, string> = {
+  100: 'Continue', 101: 'Switching Protocols',
+  200: 'OK', 201: 'Created', 202: 'Accepted', 203: 'Non-Authoritative Information', 204: 'No Content',
+  205: 'Reset Content', 206: 'Partial Content',
+  300: 'Multiple Choices', 301: 'Moved Permanently', 302: 'Found', 303: 'See Other', 304: 'Not Modified',
+  305: 'Use Proxy', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
+  400: 'Bad Request', 401: 'Unauthorized', 402: 'Payment Required', 403: 'Forbidden', 404: 'Not Found',
+  405: 'Method Not Allowed', 406: 'Not Acceptable', 407: 'Proxy Authentication Required', 408: 'Request Timeout',
+  409: 'Conflict', 410: 'Gone', 411: 'Length Required', 412: 'Precondition Failed', 413: 'Content Too Large',
+  414: 'URI Too Long', 415: 'Unsupported Media Type', 416: 'Range Not Satisfiable', 417: 'Expectation Failed',
+  418: "I'm a teapot", 421: 'Misdirected Request', 422: 'Unprocessable Content', 425: 'Too Early',
+  426: 'Upgrade Required', 429: 'Too Many Requests', 431: 'Request Header Fields Too Large',
+  500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway', 503: 'Service Unavailable',
+  504: 'Gateway Timeout', 505: 'HTTP Version Not Supported', 511: 'Network Authentication Required',
+};
+
+// 0 (`HttpResponse.error()`) and anything else outside 100-599 has no group.
+const statusGroup = (code: number) => Number.isInteger(code) ? STATUS_GROUPS[Math.floor(code / 100)] : undefined;
+
+export const statusColor = (code: number): BadgeColor => statusGroup(code)?.color ?? 'mediumdark';
+
+export const statusText = (code: number): string | undefined => STATUS_TEXTS[code] ?? statusGroup(code)?.name;
+
+// The accessible name of the status badge.
+export const statusLabel = (code: number): string => [code, statusText(code)].filter((part) => part !== undefined).join(' ');
+
+const twoDigits = (value: number): string => String(value).padStart(2, '0');
+
+// Always 24-hour, whatever the browser locale, like a log line.
+export function formatTime(time: number): string {
+  const date = new Date(time);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()].map(twoDigits).join(':');
+}
+
 // The panel shows at most this many characters of a body; Mokapi gets the whole body.
 export const BODY_LIMIT = 10_000;
 

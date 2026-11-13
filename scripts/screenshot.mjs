@@ -97,7 +97,7 @@ providers:
   await warmUp.getByText('Jane Doe').waitFor({ timeout: 120000 });
   await warmUp.close();
 
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2 });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2, locale: 'en-US' });
   await page.goto(`${storybook}/?path=/story/profile--invalid`);
   await page.getByRole('tab', { name: /^Mokapi/ }).click();
   await page.locator('[data-testid="mokapi-entry"][data-status="invalid"]').first().waitFor({ timeout: 30000 });

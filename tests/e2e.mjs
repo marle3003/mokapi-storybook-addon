@@ -301,11 +301,17 @@ const testModeOffText = (page) => page.getByTestId('mokapi-test-mode');
 const rerunButton = (page) => page.getByTestId('mokapi-rerun');
 const entryDetails = (entry) => entry.getByTestId('mokapi-details');
 const toggleDetails = (entry) => entryDetails(entry).locator('summary').click();
+// The badge exists twice per row, in the row's meta and in the heading of the response details.
+const entryBadge = (entry) => entry.getByTestId('mokapi-entry-meta').getByTestId('mokapi-status-badge');
+const responseBadge = (entry) => entryDetails(entry).getByTestId('mokapi-status-badge');
+const entryTime = (entry) => entry.getByTestId('mokapi-entry-time');
 const EMPTY_LIST_TEXT = 'No responses validated since this story was mounted.';
 
-async function assertBadgeTooltip(page, text) {
-  await reportBadge(page).hover();
-  await page.getByText(text).waitFor();
+// `exact`, because `OK` would also match "Mokapi".
+async function assertBadgeTooltip(trigger, text) {
+  const page = trigger.page();
+  await trigger.hover();
+  await page.getByText(text, { exact: true }).waitFor();
   await page.mouse.move(0, 0);
 }
 
@@ -409,7 +415,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     // Each scenario runs in a fresh browser context, so that no state leaks between them.
     const scenario = (name, run) => t.test(name, async () => {
-      const context = await browser.newContext({ viewport: { width: 1280, height: 1600 } });
+      const context = await browser.newContext({ viewport: { width: 1280, height: 1600 }, locale: 'en-US' });
       await recordFinishedStories(context);
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
@@ -708,7 +714,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await scenario(`the badge tooltip shows the test mode ${mode} of the story`, async (page) => {
         await openValidated(page, id);
         await reportBadge(page).waitFor();
-        await assertBadgeTooltip(page, TEST_MODE_TEXTS[mode]);
+        await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS[mode]);
         assert.equal(await testModeOffText(page).count(), 0);
       });
     }
@@ -725,7 +731,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     await scenario('an invalid test parameter shows the default test mode and a configuration notice', async (page) => {
       await openValidated(page, 'profile--invalid-test-parameter');
       await reportBadge(page).waitFor();
-      await assertBadgeTooltip(page, TEST_MODE_TEXTS.todo);
+      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.todo);
       await notice(page, "Mokapi: parameters.mokapi.test must be 'error', 'todo' or 'off'.").waitFor();
       await assertStoryStaysGreen(page);
     });
@@ -810,15 +816,21 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await eventually(async () => assert.equal(await rerunButton(page).isDisabled({ timeout: 1000 }), false));
     });
 
-    await scenario('an entry row shows kind, method and URL, status code and time, and the errors without expanding', async (page) => {
+    await scenario('an entry row shows kind, method and URL, status badge and time, and the errors without expanding', async (page) => {
       await openValidated(page, 'profile--invalid');
       const invalid = entries(page, 'invalid');
       await invalid.waitFor();
       const text = await invalid.textContent();
       assert.match(text, /invalid/);
       assert.match(text, /GET \/api\/profile/);
-      assert.match(text, /200/);
-      assert.match(text, /\d+:\d{2}/);
+      const badge = entryBadge(invalid);
+      assert.equal(await badge.textContent(), '200');
+      assert.equal(await badge.getAttribute('aria-label'), '200 OK');
+      assert.equal(await badge.evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(102, 191, 60)');
+      await assertBadgeTooltip(badge, 'OK');
+      // The English locale would show AM or PM without the fixed format.
+      assert.match(await entryTime(invalid).textContent(), /^\d{2}:\d{2}:\d{2}$/);
+      assert.doesNotMatch(text, /\b(AM|PM)\b/);
       assert.ok(await invalid.getByText(/required properties are missing: email/).isVisible());
       assert.equal(await invalid.getByText('(empty)').isVisible(), false);
     });
@@ -835,6 +847,11 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.match(get, /content-type: application\/json/);
       assert.match(get, /\{\s*\n\s+"name": "Jane Doe"/);
       assert.match(get, /200/);
+      const heading = responseBadge(valid);
+      await entryDetails(valid).locator('strong', { hasText: /^Response$/ }).waitFor();
+      assert.equal(await heading.textContent(), '200');
+      assert.equal(await heading.getAttribute('aria-label'), '200 OK');
+      await assertBadgeTooltip(heading, 'OK');
 
       await openValidated(page, 'profile--post-valid');
       const post = entries(page, 'valid');
@@ -1061,7 +1078,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await openValidated(page, 'profile--invalid', failingStorybook);
       await assertStoryFails(page, /Mokapi: 1 response does not match the contract\./);
       await reportBadge(page).waitFor();
-      await assertBadgeTooltip(page, TEST_MODE_TEXTS.error);
+      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
     });
   } finally {
     if (failureDirectory) console.error(`E2E failure artifacts kept in ${failureDirectory}`);
