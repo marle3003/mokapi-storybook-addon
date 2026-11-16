@@ -1,5 +1,5 @@
 import { isTestMode } from './options.js';
-import type { Status } from 'storybook/internal/types';
+import type { Status, StatusesByStoryIdAndTypeId } from 'storybook/internal/types';
 import type { Entry, Notice, PanelState, Report, ReportStatus } from './results.js';
 import type { TestMode } from './types.js';
 import type { Operation } from './validation.js';
@@ -208,4 +208,20 @@ export function sidebarStatus(storyId: string, report: Report | undefined): Stat
     // Mokapi shows its status in the section of its test provider instead.
     sidebarContextMenu: false,
   };
+}
+
+// Only these Mokapi statuses get a row; a missing value means no section. A `Map`, so `constructor` doesn't find a property of `Object`.
+const CONTEXT_MENU_LABELS = new Map<Status['value'], string>([
+  ['status-value:error', 'Mokapi: Error'],
+  ['status-value:warning', 'Mokapi: Warning'],
+]);
+
+// The row of the Mokapi section in the sidebar's context menu. Only a story has one, and only with a status to show.
+export function contextMenuRow(
+  entry: { type: string; id: string },
+  statuses: StatusesByStoryIdAndTypeId,
+): { status: Status; label: string } | undefined {
+  const status = entry.type === 'story' ? statuses[entry.id]?.[STATUS_TYPE_ID] : undefined;
+  const label = status && CONTEXT_MENU_LABELS.get(status.value);
+  return status && label ? { status, label } : undefined;
 }

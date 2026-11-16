@@ -11,6 +11,7 @@ import { toggleState } from '../dist/toggle.js';
 import { MokapiContractError, testHook, validationHook } from '../dist/listener.js';
 import {
   BODY_LIMIT,
+  contextMenuRow,
   countLine,
   errorMessage,
   formatBody,
@@ -708,6 +709,38 @@ test('sidebar status stays out of the context menu status links, the test provid
 test('sidebar status is none for a passed check and without a report', () => {
   assert.equal(sidebarStatus('a--one', { status: 'passed', headline: '' }), undefined);
   assert.equal(sidebarStatus('a--one', undefined), undefined);
+});
+
+const mokapiStatus = (value) => ({ typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', value, description: 'd' });
+
+test('context menu row is an error row for a story with an error status and a warning row for a warning status', () => {
+  const error = mokapiStatus('status-value:error');
+  const warning = mokapiStatus('status-value:warning');
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': error } }), { status: error, label: 'Mokapi: Error' });
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': warning } }), { status: warning, label: 'Mokapi: Warning' });
+});
+
+test('context menu row is none for a docs entry, a component and a group, whatever the status map holds', () => {
+  for (const type of ['docs', 'component', 'group']) {
+    const statuses = { 'a--one': { 'mokapi/validation': mokapiStatus('status-value:error') } };
+    assert.equal(contextMenuRow({ type, id: 'a--one' }, statuses), undefined, type);
+  }
+});
+
+test('context menu row is none for a story without a status', () => {
+  assert.equal(contextMenuRow({ type: 'story', id: 'a--one' }, {}), undefined);
+  assert.equal(contextMenuRow({ type: 'story', id: 'a--one' }, { 'b--two': { 'mokapi/validation': mokapiStatus('status-value:error') } }), undefined);
+});
+
+test('context menu row is none for a story with statuses of other types only', () => {
+  const other = { ...mokapiStatus('status-value:error'), typeId: 'storybook/component-test' };
+  assert.equal(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'storybook/component-test': other } }), undefined);
+});
+
+test('context menu row is none for a Mokapi status that is neither error nor warning', () => {
+  for (const value of ['status-value:success', 'status-value:pending', 'status-value:unknown']) {
+    assert.equal(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': mokapiStatus(value) } }), undefined, value);
+  }
 });
 
 test('a Mokapi that cannot be reached is reported as entry and as notice of the same render', async (t) => {

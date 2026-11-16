@@ -11,6 +11,7 @@ import { initialRemountState, nextRemount, type RemountEvent } from './remount.j
 import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
 import {
   BODY_LIMIT,
+  contextMenuRow,
   countLine,
   formatBody,
   formatTime,
@@ -130,18 +131,16 @@ const StatusDot = styled.span<{ status: Status['value'] }>(({ theme, status }) =
   background: status === 'status-value:error' ? theme.color.negative : theme.color.gold,
 }));
 
-const STATUS_LABELS: Partial<Record<Status['value'], string>> = { 'status-value:error': 'Error', 'status-value:warning': 'Warning' };
-
 // The row of a story with a Mokapi status in the context menu of the sidebar, below the separator like the
 // reports of addon-vitest.
-function MokapiContextMenuSection({ status, onOpen }: { status: Status; onOpen: () => void }) {
+function MokapiContextMenuSection({ status, label, onOpen }: { status: Status; label: string; onOpen: () => void }) {
   return (
     <ContextMenuSection>
       <ContextMenuTitle>Mokapi contract validation</ContextMenuTitle>
       <ActionList>
         <ActionList.Item>
           <ActionList.Text>Mokapi</ActionList.Text>
-          <ActionList.Button ariaLabel={`Mokapi: ${STATUS_LABELS[status.value]}`} tooltip={status.description} onClick={onOpen}>
+          <ActionList.Button ariaLabel={label} tooltip={status.description} onClick={onOpen}>
             <StatusDot status={status.value} />
           </ActionList.Button>
         </ActionList.Item>
@@ -471,11 +470,11 @@ addons.register('mokapi', (api) => {
       clearTestRuns();
     },
     render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
-    // Storybook builds the menu when it opens, so reading the store once is current. Only stories have a status.
+    // Storybook builds the menu when it opens, so reading the store once is current.
     sidebarContextMenu: ({ context }) => {
-      const status = context.type === 'story' ? statusStore.getAll()[context.id]?.[STATUS_TYPE_ID] : undefined;
-      if (!status) return null;
-      return <MokapiContextMenuSection status={status} onOpen={() => { api.selectStory(context.id); openPanel(); }} />;
+      const row = contextMenuRow(context, statusStore.getAll());
+      if (!row) return null;
+      return <MokapiContextMenuSection {...row} onOpen={() => { api.selectStory(context.id); openPanel(); }} />;
     },
   });
   addons.add(PANEL_ID, {
