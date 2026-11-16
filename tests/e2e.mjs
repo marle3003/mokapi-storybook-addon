@@ -964,9 +964,30 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       // The context menu of a sidebar row lists its statuses; it exists in Storybook's dev server only.
       await sidebarRow(page, 'profile--error-invalid').hover();
       await sidebarRow(page, 'profile--error-invalid').getByRole('button', { name: 'Open context menu' }).click();
-      await page.getByLabel('Test status for Mokapi: status-value:error').first().click();
+      await page.getByRole('button', { name: 'Mokapi: Error' }).click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
       await showsText(reportHeadline(page), '1 response does not match the contract.');
+    });
+
+    await scenario('the context menu of a story shows the Mokapi report in the test provider region, not as a status link', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'profile--error-invalid' });
+      await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
+
+      await sidebarRow(page, 'profile--error-invalid').hover();
+      await sidebarRow(page, 'profile--error-invalid').getByRole('button', { name: 'Open context menu' }).click();
+      // Storybook's TooltipLinkList (`.sb-list`) renders one div per group: the first holds the links (Open in
+      // editor, Copy story name and one link per status), the last one the sections of the registered test providers.
+      const menu = page.locator('.sb-list', { hasText: 'Copy story name' });
+      await menu.waitFor();
+      const testProviderRegion = menu.locator('> div').last();
+
+      // addon-vitest keeps its own statuses out of the status links (`sidebarContextMenu: false`), Mokapi has to do the same.
+      assert.equal(await menu.getByLabel(/^Test status for Mokapi/).count(), 0);
+
+      // The Mokapi section of the test provider `mokapi/test-provider` has a row whose button is named after the
+      // status ("Mokapi: Error") and shows the headline as tooltip.
+      await testProviderRegion.getByText('Mokapi contract validation').waitFor({ timeout: 3000 });
+      await testProviderRegion.getByRole('button', { name: 'Mokapi: Error' }).waitFor({ timeout: 3000 });
     });
 
     await scenario('Clear all statuses removes the Mokapi statuses and the Run tests widget names Mokapi in one line', async (page) => {
@@ -1063,7 +1084,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await page.getByRole('tab', { name: /^Mokapi/, selected: true }).count(), 0);
       await sidebarRow(page, warned).hover();
       await sidebarRow(page, warned).getByRole('button', { name: 'Open context menu' }).click();
-      await page.getByLabel('Test status for Mokapi: status-value:warning').first().click();
+      await page.getByRole('button', { name: 'Mokapi: Warning' }).click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
     });
 

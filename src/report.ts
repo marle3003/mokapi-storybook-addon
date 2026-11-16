@@ -204,5 +204,8 @@ export function sidebarStatus(storyId: string, report: Report | undefined): Stat
     title: 'Mokapi',
     value: report.status === 'failed' ? 'status-value:error' : 'status-value:warning',
     description: report.headline,
+    // Storybook lists a status in the top group of the context menu unless the status opts out. Like addon-vitest,
+    // Mokapi shows its status in the section of its test provider instead.
+    sidebarContextMenu: false,
   };
 }

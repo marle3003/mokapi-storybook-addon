@@ -3,9 +3,10 @@
 import React, { useSyncExternalStore, type ReactNode } from 'react';
 import { addons, experimental_getStatusStore, types, useGlobals, useStorybookApi, useStorybookState } from 'storybook/manager-api';
 import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDER_PHASE_CHANGED } from 'storybook/internal/core-events';
-import { Badge, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
+import { ActionList, Badge, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
 import { CheckIcon, CircleHollowIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
 import { styled, useTheme } from 'storybook/theming';
+import type { Status } from 'storybook/internal/types';
 import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
 import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
 import {
@@ -118,6 +119,36 @@ const PanelScroll = styled(ScrollArea)({ height: '100%' });
 const Hint = styled.p({ margin: 0, padding: 16 });
 const Title = styled.span({ display: 'inline-flex', gap: 6, alignItems: 'center' });
 const ProviderLabel = styled.div({ padding: '8px 12px' });
+const ContextMenuSection = styled.div({ minWidth: 240, padding: '0 8px 4px' });
+const ContextMenuTitle = styled.div(({ theme }) => ({ padding: '8px 0', fontSize: theme.typography.size.s1, color: theme.color.defaultText }));
+// The status dot of addon-vitest's rows in the same menu (its component is not exported).
+const StatusDot = styled.span<{ status: Status['value'] }>(({ theme, status }) => ({
+  width: 6,
+  height: 6,
+  margin: 4,
+  borderRadius: '50%',
+  background: status === 'status-value:error' ? theme.color.negative : theme.color.gold,
+}));
+
+const STATUS_LABELS: Partial<Record<Status['value'], string>> = { 'status-value:error': 'Error', 'status-value:warning': 'Warning' };
+
+// The row of a story with a Mokapi status in the context menu of the sidebar, below the separator like the
+// reports of addon-vitest.
+function MokapiContextMenuSection({ status, onOpen }: { status: Status; onOpen: () => void }) {
+  return (
+    <ContextMenuSection>
+      <ContextMenuTitle>Mokapi contract validation</ContextMenuTitle>
+      <ActionList>
+        <ActionList.Item>
+          <ActionList.Text>Mokapi</ActionList.Text>
+          <ActionList.Button ariaLabel={`Mokapi: ${STATUS_LABELS[status.value]}`} tooltip={status.description} onClick={onOpen}>
+            <StatusDot status={status.value} />
+          </ActionList.Button>
+        </ActionList.Item>
+      </ActionList>
+    </ContextMenuSection>
+  );
+}
 
 // Same look as the status badge of Storybook's Interactions panel, which is not exported.
 const StatusBadge = styled.span<{ status: BadgeColor }>(({ theme, status }) => ({
@@ -400,11 +431,12 @@ addons.register('mokapi', (api) => {
     receiveTestRun(payload);
     updateStatuses(ranStoryIds(payload).map((storyId) => [storyId, testRuns[storyId]?.report]));
   });
-  // Selecting the status in the sidebar shows the details.
-  statusStore.onSelect(() => {
+  const openPanel = (): void => {
     api.setSelectedPanel(PANEL_ID);
     api.togglePanel(true);
-  });
+  };
+  // Selecting the status in the sidebar shows the details.
+  statusStore.onSelect(openPanel);
   let remount = nextRemount(initialRemountState, { type: 'initial', validation: api.getGlobals().mokapiValidation }).state;
   const handle = (event: RemountEvent): void => {
     const next = nextRemount(remount, event);
@@ -439,6 +471,12 @@ addons.register('mokapi', (api) => {
       clearTestRuns();
     },
     render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
+    // Storybook builds the menu when it opens, so reading the store once is current. Only stories have a status.
+    sidebarContextMenu: ({ context }) => {
+      const status = context.type === 'story' ? statusStore.getAll()[context.id]?.[STATUS_TYPE_ID] : undefined;
+      if (!status) return null;
+      return <MokapiContextMenuSection status={status} onOpen={() => { api.selectStory(context.id); openPanel(); }} />;
+    },
   });
   addons.add(PANEL_ID, {
     type: types.PANEL,

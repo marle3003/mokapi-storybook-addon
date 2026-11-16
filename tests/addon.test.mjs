@@ -693,9 +693,16 @@ test('a body is shown pretty-printed as JSON, as text otherwise and as (empty) w
 
 test('sidebar status is an error for a failed and a warning for a warning report, titled Mokapi', () => {
   const headline = '1 response does not match the contract.';
-  const base = { typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', description: headline };
+  const base = { typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', description: headline, sidebarContextMenu: false };
   assert.deepEqual(sidebarStatus('a--one', { status: 'failed', headline }), { ...base, value: 'status-value:error' });
   assert.deepEqual(sidebarStatus('a--one', { status: 'warning', headline }), { ...base, value: 'status-value:warning' });
+});
+
+test('sidebar status stays out of the context menu status links, the test provider region shows Mokapi', () => {
+  const headline = '1 response does not match the contract.';
+  for (const status of ['failed', 'warning']) {
+    assert.equal(sidebarStatus('a--one', { status, headline }).sidebarContextMenu, false, status);
+  }
 });
 
 test('sidebar status is none for a passed check and without a report', () => {
@@ -1615,6 +1622,7 @@ test('a test run result of a warning report keeps its entries, notices and test 
     title: 'Mokapi',
     description: '1 response does not match the contract.',
     value: 'status-value:warning',
+    sidebarContextMenu: false,
   });
 });
 
