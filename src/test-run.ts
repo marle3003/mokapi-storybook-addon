@@ -21,6 +21,10 @@ export const readTestRun = (payload: unknown): TestRunPayload | undefined =>
     ? (payload as unknown as TestRunPayload)
     : undefined;
 
+// The event comes from addon-vitest too, so its type and payload are read the same careful way and never throw.
+export const readTestRunEvent = (event: unknown): TestRunPayload | undefined =>
+  isRecord(event) && event.type === 'test-run-completed' ? readTestRun(event.payload) : undefined;
+
 /** What the last test run found out about a story: its Mokapi report with the entries and notices behind it. */
 export interface StoryRun {
   report: Report;

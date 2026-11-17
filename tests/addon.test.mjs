@@ -6,7 +6,7 @@ import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '..
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
-import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, readTestRun, releaseOvertaken, settleReport, startValidatingMount, testRunResults } from '../dist/test-run.js';
+import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, readTestRun, readTestRunEvent, releaseOvertaken, settleReport, startValidatingMount, testRunResults } from '../dist/test-run.js';
 import { toggleState } from '../dist/toggle.js';
 import { MokapiContractError, testHook, validationHook } from '../dist/listener.js';
 import {
@@ -1779,6 +1779,29 @@ test('a test run payload with the expected shape is read as it is', () => {
   assert.equal(readTestRun(payload), payload);
   const empty = testRunOf([]);
   assert.equal(readTestRun(empty), empty);
+});
+
+// The channel event itself is untrusted too: `readTestRunEvent` reads the run of a completed event and never throws.
+test('a channel event that is no completed test run with a payload as expected is not read', () => {
+  const valid = testRunOf([componentTest('a--one')]);
+  const events = {
+    'undefined': undefined,
+    'null': null,
+    'a string': 'test-run-completed',
+    'a number': 1,
+    'an object without a type': { payload: valid },
+    'another event type': { type: 'test-run-started', payload: valid },
+    'no payload': { type: 'test-run-completed' },
+    'a malformed payload': { type: 'test-run-completed', payload: malformedTestRuns['no reports'] },
+  };
+  for (const [name, event] of Object.entries(events)) {
+    assert.equal(readTestRunEvent(event), undefined, name);
+  }
+});
+
+test('a completed test run event is read as the payload it carries', () => {
+  const payload = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('warning')] });
+  assert.equal(readTestRunEvent({ type: 'test-run-completed', payload }), payload);
 });
 
 test('a test run result of a warning report keeps its entries, notices and test mode and has the headline of the entries', () => {
