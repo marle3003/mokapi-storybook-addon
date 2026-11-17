@@ -716,8 +716,17 @@ const mokapiStatus = (value) => ({ typeId: 'mokapi/validation', storyId: 'a--one
 test('context menu row is an error row for a story with an error status and a warning row for a warning status', () => {
   const error = mokapiStatus('status-value:error');
   const warning = mokapiStatus('status-value:warning');
-  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': error } }), { status: error, label: 'Mokapi: Error' });
-  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': warning } }), { status: warning, label: 'Mokapi: Warning' });
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': error } }, 0), { status: error, label: 'Mokapi: Error', invalid: 0 });
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': warning } }, 0), { status: warning, label: 'Mokapi: Warning', invalid: 0 });
+});
+
+test('context menu row carries the number of invalid responses and names it in the label', () => {
+  const error = mokapiStatus('status-value:error');
+  const statuses = { 'a--one': { 'mokapi/validation': error } };
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, statuses, 1), { status: error, label: 'Mokapi: Error (1 invalid response)', invalid: 1 });
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, statuses, 3), { status: error, label: 'Mokapi: Error (3 invalid responses)', invalid: 3 });
+  const warning = mokapiStatus('status-value:warning');
+  assert.equal(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': warning } }, 2).label, 'Mokapi: Warning (2 invalid responses)');
 });
 
 test('context menu row is none for a docs entry, a component and a group, whatever the status map holds', () => {

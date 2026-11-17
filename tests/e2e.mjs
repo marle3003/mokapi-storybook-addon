@@ -964,7 +964,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       // The context menu of a sidebar row lists its statuses; it exists in Storybook's dev server only.
       await sidebarRow(page, 'profile--error-invalid').hover();
       await sidebarRow(page, 'profile--error-invalid').getByRole('button', { name: 'Open context menu' }).click();
-      await page.getByRole('button', { name: 'Mokapi: Error' }).click();
+      await page.getByRole('button', { name: 'Mokapi: Error (1 invalid response)', exact: true }).click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
       await showsText(reportHeadline(page), '1 response does not match the contract.');
     });
@@ -984,10 +984,51 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       // addon-vitest keeps its own statuses out of the status links (`sidebarContextMenu: false`), Mokapi has to do the same.
       assert.equal(await menu.getByLabel(/^Test status for Mokapi/).count(), 0);
 
-      // The Mokapi section of the test provider `mokapi/test-provider` has a row whose button is named after the
-      // status ("Mokapi: Error") and shows the headline as tooltip.
-      await testProviderRegion.getByText('Mokapi contract validation').waitFor({ timeout: 3000 });
-      await testProviderRegion.getByRole('button', { name: 'Mokapi: Error' }).waitFor({ timeout: 3000 });
+      // The Mokapi section of the test provider `mokapi/test-provider` is one row "Contract" with no
+      // heading. Its button shows the number of invalid responses before the status dot, is named after the status
+      // and the number, and has the headline as tooltip.
+      await testProviderRegion.getByText('Contract', { exact: true }).waitFor({ timeout: 3000 });
+      assert.equal(await menu.getByText('Mokapi contract validation').count(), 0);
+      const button = testProviderRegion.getByRole('button', { name: 'Mokapi: Error (1 invalid response)', exact: true });
+      await button.waitFor({ timeout: 3000 });
+      await showsText(button, '1');
+      await button.hover();
+      await page.getByText('1 response does not match the contract.', { exact: true }).waitFor({ timeout: 3000 });
+    });
+
+    await scenario('the Mokapi row of the context menu is laid out like the Interactions row', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'profile--error-invalid' });
+      await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
+
+      await sidebarRow(page, 'profile--error-invalid').hover();
+      await sidebarRow(page, 'profile--error-invalid').getByRole('button', { name: 'Open context menu' }).click();
+      const menu = page.locator('.sb-list', { hasText: 'Copy story name' });
+      await menu.waitFor();
+      const testProviderRegion = menu.locator('> div').last();
+      await testProviderRegion.getByText('Contract', { exact: true }).waitFor({ timeout: 3000 });
+      await testProviderRegion.getByText('Run component tests', { exact: true }).waitFor({ timeout: 3000 });
+
+      const mokapiRow = testProviderRegion.getByRole('listitem').filter({ hasText: 'Contract' });
+      const interactionsRow = testProviderRegion.getByRole('listitem').filter({ hasText: 'Interactions' });
+      const boxOf = async (locator) => {
+        const box = await locator.boundingBox();
+        assert.ok(box, 'the element has a bounding box');
+        return box;
+      };
+      const rightOf = async (locator) => { const box = await boxOf(locator); return box.x + box.width; };
+      const assertSameEdge = (actual, expected, what) =>
+        assert.ok(Math.abs(actual - expected) <= 1, `${what}: Mokapi ${actual}px, addon-vitest ${expected}px`);
+
+      // The row texts start at the same x.
+      assertSameEdge(
+        (await boxOf(mokapiRow.getByText('Contract', { exact: true }))).x,
+        (await boxOf(interactionsRow.getByText('Interactions', { exact: true }))).x,
+        'left edge of the row text');
+      // The status buttons end at the same x.
+      assertSameEdge(
+        await rightOf(mokapiRow.getByRole('button')),
+        await rightOf(interactionsRow.getByRole('button')),
+        'right edge of the status button');
     });
 
     await scenario('Clear all statuses removes the Mokapi statuses and the Run tests widget names Mokapi in one line', async (page) => {

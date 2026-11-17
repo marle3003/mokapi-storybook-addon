@@ -120,8 +120,7 @@ const PanelScroll = styled(ScrollArea)({ height: '100%' });
 const Hint = styled.p({ margin: 0, padding: 16 });
 const Title = styled.span({ display: 'inline-flex', gap: 6, alignItems: 'center' });
 const ProviderLabel = styled.div({ padding: '8px 12px' });
-const ContextMenuSection = styled.div({ minWidth: 240, padding: '0 8px 4px' });
-const ContextMenuTitle = styled.div(({ theme }) => ({ padding: '8px 0', fontSize: theme.typography.size.s1, color: theme.color.defaultText }));
+const ContextMenuList = styled(ActionList)({ minWidth: 240, padding: 0 });
 // The status dot of addon-vitest's rows in the same menu (its component is not exported).
 const StatusDot = styled.span<{ status: Status['value'] }>(({ theme, status }) => ({
   width: 6,
@@ -131,21 +130,19 @@ const StatusDot = styled.span<{ status: Status['value'] }>(({ theme, status }) =
   background: status === 'status-value:error' ? theme.color.negative : theme.color.gold,
 }));
 
-// The row of a story with a Mokapi status in the context menu of the sidebar, below the separator like the
-// reports of addon-vitest.
-function MokapiContextMenuSection({ status, label, onOpen }: { status: Status; label: string; onOpen: () => void }) {
+// The row of a story with a Mokapi status in the context menu of the sidebar, below the reports of addon-vitest and
+// laid out like them: the number of invalid responses and the status dot in the button, the headline as tooltip.
+function MokapiContextMenuRow({ status, label, invalid, onOpen }: { status: Status; label: string; invalid: number; onOpen: () => void }) {
   return (
-    <ContextMenuSection>
-      <ContextMenuTitle>Mokapi contract validation</ContextMenuTitle>
-      <ActionList>
-        <ActionList.Item>
-          <ActionList.Text>Mokapi</ActionList.Text>
-          <ActionList.Button ariaLabel={label} tooltip={status.description} onClick={onOpen}>
-            <StatusDot status={status.value} />
-          </ActionList.Button>
-        </ActionList.Item>
-      </ActionList>
-    </ContextMenuSection>
+    <ContextMenuList>
+      <ActionList.Item>
+        <ActionList.Text>Contract</ActionList.Text>
+        <ActionList.Button ariaLabel={label} tooltip={status.description} onClick={onOpen}>
+          {invalid || null}
+          <StatusDot status={status.value} />
+        </ActionList.Button>
+      </ActionList.Item>
+    </ContextMenuList>
   );
 }
 
@@ -472,9 +469,9 @@ addons.register('mokapi', (api) => {
     render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
     // Storybook builds the menu when it opens, so reading the store once is current.
     sidebarContextMenu: ({ context }) => {
-      const row = contextMenuRow(context, statusStore.getAll());
+      const row = contextMenuRow(context, statusStore.getAll(), invalidCount(panelOf(panelState, testRuns, context.id)));
       if (!row) return null;
-      return <MokapiContextMenuSection {...row} onOpen={() => { api.selectStory(context.id); openPanel(); }} />;
+      return <MokapiContextMenuRow {...row} onOpen={() => { api.selectStory(context.id); openPanel(); }} />;
     },
   });
   addons.add(PANEL_ID, {

@@ -217,11 +217,14 @@ const CONTEXT_MENU_LABELS = new Map<Status['value'], string>([
 ]);
 
 // The row of the Mokapi section in the sidebar's context menu. Only a story has one, and only with a status to show.
+// Like addon-vitest's Interactions button, the label names the number of invalid responses, when there are any.
 export function contextMenuRow(
   entry: { type: string; id: string },
   statuses: StatusesByStoryIdAndTypeId,
-): { status: Status; label: string } | undefined {
+  invalid: number,
+): { status: Status; label: string; invalid: number } | undefined {
   const status = entry.type === 'story' ? statuses[entry.id]?.[STATUS_TYPE_ID] : undefined;
   const label = status && CONTEXT_MENU_LABELS.get(status.value);
-  return status && label ? { status, label } : undefined;
+  if (!status || !label) return undefined;
+  return { status, label: invalid > 0 ? `${label} (${invalid} invalid ${invalid === 1 ? 'response' : 'responses'})` : label, invalid };
 }

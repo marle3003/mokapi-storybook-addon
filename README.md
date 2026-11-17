@@ -424,7 +424,8 @@ Storybook's status store:
 The status has the title `Mokapi`. Its description is the headline of the
 [error message](#error-message), for example
 `1 response does not match the contract.`. Open the context menu of the
-story in the sidebar and select the status to open the **Mokapi** panel.
+story in the sidebar and select the **Contract** row to open the **Mokapi** panel.
+The row shows the number of invalid responses and a status dot.
 
 A new result of the story replaces its status, and a passed check removes it.
 Switching to another story keeps the status. **Clear all statuses** in the
