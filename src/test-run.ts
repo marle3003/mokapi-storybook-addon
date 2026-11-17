@@ -1,6 +1,6 @@
 import { isTestMode } from './options.js';
 import { CONTRACT_ERROR_PREFIX, headline } from './report.js';
-import { resultsOfStory, type Entry, type Notice, type PanelState, type Report } from './results.js';
+import { invalidCount, resultsOfStory, type Entry, type Notice, type PanelState, type Report } from './results.js';
 import type { TestMode } from './types.js';
 
 // What the addon reads of the `CurrentRun` that @storybook/addon-vitest publishes when a run is over. It is
@@ -31,7 +31,7 @@ function runOfReport(reports: RunReport[] = []): StoryRun | undefined {
   const report = reports.find(({ type, version }) => type === 'mokapi' && version === 1);
   if (report === undefined || (report.status !== 'warning' && report.status !== 'failed') || !isResult(report.result)) return undefined;
   const { entries, notices, testMode } = report.result;
-  return { report: { status: report.status, headline: headline(report.result) }, entries, notices, ...(isTestMode(testMode) && { testMode }) };
+  return { report: { status: report.status, headline: headline(report.result), invalid: invalidCount(report.result) }, entries, notices, ...(isTestMode(testMode) && { testMode }) };
 }
 
 // A contract error fails the story only in test mode `error`.
@@ -39,7 +39,7 @@ function runOfError(description = ''): StoryRun | undefined {
   const start = description.indexOf(CONTRACT_ERROR_PREFIX);
   if (start < 0) return undefined;
   const failed = description.slice(start + CONTRACT_ERROR_PREFIX.length).split('\n')[0];
-  return { report: { status: 'failed', headline: failed }, entries: [], notices: [], testMode: 'error' };
+  return { report: { status: 'failed', headline: failed, invalid: 0 }, entries: [], notices: [], testMode: 'error' };
 }
 
 // A story took part in the run when it has a component test status: stories without a Mokapi report (validation

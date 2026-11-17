@@ -996,6 +996,24 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await page.getByText('1 response does not match the contract.', { exact: true }).waitFor({ timeout: 3000 });
     });
 
+    await scenario('the context menu row of a story shows the number of invalid responses after a browser reload', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'profile--error-invalid' });
+      await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
+
+      // A new page load empties the manager's panel state. The status survives on the dev server (the status store
+      // leader), and the story with the status is not rendered again, because another story is selected.
+      await openStory(page, validatingStorybook.url, { id: 'profile--valid' });
+      await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
+
+      await sidebarRow(page, 'profile--error-invalid').hover();
+      await sidebarRow(page, 'profile--error-invalid').getByRole('button', { name: 'Open context menu' }).click();
+      const menu = page.locator('.sb-list', { hasText: 'Copy story name' });
+      await menu.waitFor();
+      const button = menu.locator('> div').last().getByRole('button', { name: 'Mokapi: Error (1 invalid response)', exact: true });
+      await button.waitFor({ timeout: 3000 });
+      await showsText(button, '1');
+    });
+
     await scenario('the Mokapi row of the context menu is laid out like the Interactions row', async (page) => {
       await openStory(page, validatingStorybook.url, { id: 'profile--error-invalid' });
       await assertSidebarStatus(page, 'profile--error-invalid', 'Error');

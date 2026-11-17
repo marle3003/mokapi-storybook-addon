@@ -673,7 +673,7 @@ test('time is formatted as HH:mm:ss in local time, whatever the locale', () => {
 test('report headline is the headline of the report for a warning and a failed report only', () => {
   assert.equal(reportHeadline({ status: 'failed', headline: '1 response does not match the contract.' }), '1 response does not match the contract.');
   assert.equal(reportHeadline({ status: 'warning', headline: '1 response does not match the contract.' }), '1 response does not match the contract.');
-  assert.equal(reportHeadline({ status: 'passed', headline: '' }), undefined);
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }), undefined);
   assert.equal(reportHeadline(undefined), undefined);
 });
 
@@ -695,15 +695,31 @@ test('a body is shown pretty-printed as JSON, as text otherwise and as (empty) w
 test('sidebar status is an error for a failed and a warning for a warning report, titled Mokapi', () => {
   const headline = '1 response does not match the contract.';
   const base = { typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', description: headline, sidebarContextMenu: false };
-  assert.deepEqual(sidebarStatus('a--one', { status: 'failed', headline }), { ...base, value: 'status-value:error' });
-  assert.deepEqual(sidebarStatus('a--one', { status: 'warning', headline }), { ...base, value: 'status-value:warning' });
+  assert.deepEqual(sidebarStatus('a--one', { status: 'failed', headline, invalid: 1 }), { ...base, value: 'status-value:error', data: { invalid: 1 } });
+  assert.deepEqual(sidebarStatus('a--one', { status: 'warning', headline, invalid: 1 }), { ...base, value: 'status-value:warning', data: { invalid: 1 } });
 });
 
 test('sidebar status stays out of the context menu status links, the test provider region shows Mokapi', () => {
   const headline = '1 response does not match the contract.';
   for (const status of ['failed', 'warning']) {
-    assert.equal(sidebarStatus('a--one', { status, headline }).sidebarContextMenu, false, status);
+    assert.equal(sidebarStatus('a--one', { status, headline, invalid: 0 }).sidebarContextMenu, false, status);
   }
+});
+
+test('sidebar status carries the number of invalid responses of the report, so the context menu needs no panel state', () => {
+  const headline = '2 responses do not match the contract.';
+  assert.deepEqual(sidebarStatus('a--one', { status: 'failed', headline, invalid: 2 }).data, { invalid: 2 });
+  assert.deepEqual(sidebarStatus('a--one', { status: 'warning', headline, invalid: 1 }).data, { invalid: 1 });
+  assert.deepEqual(sidebarStatus('a--one', { status: 'failed', headline: 'not reachable', invalid: 0 }).data, { invalid: 0 });
+});
+
+test('context menu row reads the number of invalid responses from the status in the store, as after a browser reload', () => {
+  const statuses = { 'a--one': { 'mokapi/validation': { ...mokapiStatus('status-value:error'), data: { invalid: 2 } } } };
+  const row = contextMenuRow({ type: 'story', id: 'a--one' }, statuses);
+  assert.equal(row.invalid, 2);
+  assert.equal(row.label, 'Mokapi: Error (2 invalid responses)');
+  const noInvalid = { 'a--one': { 'mokapi/validation': { ...mokapiStatus('status-value:error'), data: { invalid: 0 } } } };
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, noInvalid).invalid, 0);
 });
 
 test('sidebar status is none for a passed check and without a report', () => {
@@ -711,22 +727,35 @@ test('sidebar status is none for a passed check and without a report', () => {
   assert.equal(sidebarStatus('a--one', undefined), undefined);
 });
 
-const mokapiStatus = (value) => ({ typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', value, description: 'd' });
+const mokapiStatus = (value, invalid) => ({ typeId: 'mokapi/validation', storyId: 'a--one', title: 'Mokapi', value, description: 'd', ...(invalid !== undefined && { data: { invalid } }) });
 
 test('context menu row is an error row for a story with an error status and a warning row for a warning status', () => {
   const error = mokapiStatus('status-value:error');
   const warning = mokapiStatus('status-value:warning');
-  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': error } }, 0), { status: error, label: 'Mokapi: Error', invalid: 0 });
-  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': warning } }, 0), { status: warning, label: 'Mokapi: Warning', invalid: 0 });
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': error } }), { status: error, label: 'Mokapi: Error', invalid: 0 });
+  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': warning } }), { status: warning, label: 'Mokapi: Warning', invalid: 0 });
 });
 
 test('context menu row carries the number of invalid responses and names it in the label', () => {
-  const error = mokapiStatus('status-value:error');
-  const statuses = { 'a--one': { 'mokapi/validation': error } };
-  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, statuses, 1), { status: error, label: 'Mokapi: Error (1 invalid response)', invalid: 1 });
-  assert.deepEqual(contextMenuRow({ type: 'story', id: 'a--one' }, statuses, 3), { status: error, label: 'Mokapi: Error (3 invalid responses)', invalid: 3 });
-  const warning = mokapiStatus('status-value:warning');
-  assert.equal(contextMenuRow({ type: 'story', id: 'a--one' }, { 'a--one': { 'mokapi/validation': warning } }, 2).label, 'Mokapi: Warning (2 invalid responses)');
+  const story = { type: 'story', id: 'a--one' };
+  const error = mokapiStatus('status-value:error', 1);
+  assert.deepEqual(contextMenuRow(story, { 'a--one': { 'mokapi/validation': error } }), { status: error, label: 'Mokapi: Error (1 invalid response)', invalid: 1 });
+  const errors = mokapiStatus('status-value:error', 3);
+  assert.deepEqual(contextMenuRow(story, { 'a--one': { 'mokapi/validation': errors } }), { status: errors, label: 'Mokapi: Error (3 invalid responses)', invalid: 3 });
+  const warning = mokapiStatus('status-value:warning', 2);
+  assert.equal(contextMenuRow(story, { 'a--one': { 'mokapi/validation': warning } }).label, 'Mokapi: Warning (2 invalid responses)');
+});
+
+test('context menu row counts no invalid responses when the status data holds no count, as the store is shared', () => {
+  const story = { type: 'story', id: 'a--one' };
+  const noData = mokapiStatus('status-value:error');
+  assert.deepEqual(contextMenuRow(story, { 'a--one': { 'mokapi/validation': noData } }), { status: noData, label: 'Mokapi: Error', invalid: 0 });
+  for (const invalid of ['x', -1, 1.5, NaN, null, undefined]) {
+    const status = { ...mokapiStatus('status-value:error'), data: { invalid } };
+    assert.deepEqual(contextMenuRow(story, { 'a--one': { 'mokapi/validation': status } }), { status, label: 'Mokapi: Error', invalid: 0 }, String(invalid));
+  }
+  const notObject = { ...mokapiStatus('status-value:error'), data: 'x' };
+  assert.equal(contextMenuRow(story, { 'a--one': { 'mokapi/validation': notObject } }).invalid, 0);
 });
 
 test('context menu row is none for a docs entry, a component and a group, whatever the status map holds', () => {
@@ -834,7 +863,13 @@ test('afterEach in error mode adds a failed report and sends it to the panel', a
   await finished;
   assert.equal(context.reports[0].status, 'failed');
   const { renderId } = panel.actions[0];
-  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId, storyId: 'profile--valid', status: 'failed', headline: invalidHeadline });
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId, storyId: 'profile--valid', status: 'failed', headline: invalidHeadline, invalid: 1 });
+});
+
+test('the report action names the number of invalid responses, so the manager needs no panel state for the sidebar row', async (t) => {
+  const { panel, finished } = await runInvalidStory(t, { test: 'warning' });
+  await finished;
+  assert.equal(panel.actions.at(-1).invalid, 1);
 });
 
 test('afterEach in error mode throws the message of the invalid responses under Vitest', async (t) => {
@@ -869,7 +904,7 @@ test('afterEach in warning mode sends a warning report and passes the story, als
   const { panel, context, finished } = await runInvalidStory(t, { test: 'warning' });
   await finished;
   assert.equal(context.reports[0].status, 'warning');
-  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'warning', headline: invalidHeadline });
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'warning', headline: invalidHeadline, invalid: 1 });
 });
 
 test('afterEach sends a passed report with an empty headline', async () => {
@@ -877,7 +912,7 @@ test('afterEach sends a passed report with an empty headline', async () => {
   const context = testContext(fakeWorker(), failingMode);
   validationHook(context, hookOptions(panel));
   await testHook(context, hookOptions(panel));
-  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'passed', headline: '' });
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'passed', headline: '', invalid: 0 });
 });
 
 test('afterEach sends no report in off mode, with validation off or for a disabled story', async () => {
@@ -1396,11 +1431,11 @@ test('panel keeps the test mode of the render and resets it with the next render
   assert.equal('testMode' in initialPanelState, false);
 });
 
-const reportOf = (renderId, status = 'failed', headline = '1 response does not match the contract.') => ({ type: 'report', renderId, storyId: 'a--one', status, headline });
+const reportOf = (renderId, status = 'failed', headline = '1 response does not match the contract.', invalid = 1) => ({ type: 'report', renderId, storyId: 'a--one', status, headline, invalid });
 
 test('panel keeps the report of the current render and clears it with the next render', () => {
   const state = reduceAll(renderStarted(1), resultOf(1, 1, 'invalid'), reportOf(1));
-  assert.deepEqual(state.report, { status: 'failed', headline: '1 response does not match the contract.' });
+  assert.deepEqual(state.report, { status: 'failed', headline: '1 response does not match the contract.', invalid: 1 });
   assert.equal(state.entries.length, 1);
   assert.equal('report' in reduceAll(renderStarted(1), reportOf(1), renderStarted(2)), false);
   assert.equal('report' in initialPanelState, false);
@@ -1652,7 +1687,7 @@ test('a test run result of a warning report keeps its entries, notices and test 
   const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('warning', result)] });
   assert.deepEqual(testRunResults(run), {
     'a--one': {
-      report: { status: 'warning', headline: '1 response does not match the contract.' },
+      report: { status: 'warning', headline: '1 response does not match the contract.', invalid: 1 },
       entries: result.entries,
       notices: result.notices,
       testMode: 'warning',
@@ -1664,14 +1699,21 @@ test('a test run result of a warning report keeps its entries, notices and test 
     title: 'Mokapi',
     description: '1 response does not match the contract.',
     value: 'status-value:warning',
+    data: { invalid: 1 },
     sidebarContextMenu: false,
   });
+});
+
+test('a test run result carries the number of invalid responses in its report', () => {
+  const result = { entries: [invalidEntry(), invalidEntry()], notices: [], testMode: 'warning' };
+  const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('warning', result)] });
+  assert.deepEqual(sidebarStatus('a--one', testRunResults(run)['a--one'].report).data, { invalid: 2 });
 });
 
 test('a test run result of a failed report is failed', () => {
   const result = { entries: [], notices: [panelNotice('unreachable', 'not reachable')], testMode: 'error' };
   const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('failed', result)] });
-  assert.deepEqual(testRunResults(run)['a--one'].report, { status: 'failed', headline: 'not reachable' });
+  assert.deepEqual(testRunResults(run)['a--one'].report, { status: 'failed', headline: 'not reachable', invalid: 0 });
 });
 
 test('stories that ran without a failing Mokapi report took part in the run but have no result', () => {
@@ -1692,7 +1734,7 @@ test('a failed story without report gets a failed result with the headline of th
   ].join('\n');
   const run = testRunOf([componentTest('a--one', 'status-value:error', description)]);
   assert.deepEqual(testRunResults(run), {
-    'a--one': { report: { status: 'failed', headline: '1 response does not match the contract.' }, entries: [], notices: [], testMode: 'error' },
+    'a--one': { report: { status: 'failed', headline: '1 response does not match the contract.', invalid: 0 }, entries: [], notices: [], testMode: 'error' },
   });
 });
 

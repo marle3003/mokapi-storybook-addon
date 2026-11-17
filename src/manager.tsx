@@ -469,7 +469,7 @@ addons.register('mokapi', (api) => {
     render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
     // Storybook builds the menu when it opens, so reading the store once is current.
     sidebarContextMenu: ({ context }) => {
-      const row = contextMenuRow(context, statusStore.getAll(), invalidCount(panelOf(panelState, testRuns, context.id)));
+      const row = contextMenuRow(context, statusStore.getAll());
       if (!row) return null;
       return <MokapiContextMenuRow {...row} onOpen={() => { api.selectStory(context.id); openPanel(); }} />;
     },

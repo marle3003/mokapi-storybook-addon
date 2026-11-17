@@ -36,10 +36,14 @@ export interface Notice {
 
 export type ReportStatus = 'passed' | 'warning' | 'failed';
 
-/** The verdict of the story's afterEach: the status and the headline of the result (`headline`, empty when passed). */
+/**
+ * The verdict of the story's afterEach: the status, the headline of the result (empty when passed) and the number of
+ * invalid responses behind it, which the sidebar status carries for stories the manager holds no entries of.
+ */
 export interface Report {
   status: ReportStatus;
   headline: string;
+  invalid: number;
 }
 
 // renderId is unique per mount of a story (a re-render keeps it), so late answers of an earlier mount can be recognized.
@@ -68,7 +72,7 @@ export function reducePanel(state: PanelState, action: PanelAction): PanelState 
     return { ...initialPanelState, storyId: action.storyId, renderId: action.renderId, ...(action.testMode && { testMode: action.testMode }) };
   }
   if (action.renderId !== state.renderId) return state;
-  if (action.type === 'report') return { ...state, report: { status: action.status, headline: action.headline } };
+  if (action.type === 'report') return { ...state, report: { status: action.status, headline: action.headline, invalid: action.invalid } };
   if (action.type === 'result') {
     return { ...state, entries: [...state.entries, action.entry].sort((a, b) => a.sequence - b.sequence) };
   }
@@ -79,5 +83,5 @@ export function reducePanel(state: PanelState, action: PanelAction): PanelState 
 export const resultsOfStory = (state: PanelState, storyId: string): PanelState =>
   state.storyId === storyId ? state : initialPanelState;
 
-export const invalidCount = (state: PanelState): number =>
+export const invalidCount = (state: Pick<PanelState, 'entries'>): number =>
   state.entries.filter(({ status }) => status === 'invalid').length;

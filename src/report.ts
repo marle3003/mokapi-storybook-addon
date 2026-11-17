@@ -204,6 +204,8 @@ export function sidebarStatus(storyId: string, report: Report | undefined): Stat
     title: 'Mokapi',
     value: report.status === 'failed' ? 'status-value:error' : 'status-value:warning',
     description: report.headline,
+    // The context menu reads the number from the status store, which outlives the panel state of a browser reload.
+    data: { invalid: report.invalid },
     // Storybook lists a status in the top group of the context menu unless the status opts out. Like addon-vitest,
     // Mokapi shows its status in the section of its test provider instead.
     sidebarContextMenu: false,
@@ -216,15 +218,21 @@ const CONTEXT_MENU_LABELS = new Map<Status['value'], string>([
   ['status-value:warning', 'Mokapi: Warning'],
 ]);
 
+// `data` is untyped and the store is shared, so anything but a count of invalid responses is no count.
+function invalidCountOf({ data }: Status): number {
+  const invalid = data?.invalid;
+  return Number.isInteger(invalid) && invalid > 0 ? invalid : 0;
+}
+
 // The row of the Mokapi section in the sidebar's context menu. Only a story has one, and only with a status to show.
 // Like addon-vitest's Interactions button, the label names the number of invalid responses, when there are any.
 export function contextMenuRow(
   entry: { type: string; id: string },
   statuses: StatusesByStoryIdAndTypeId,
-  invalid: number,
 ): { status: Status; label: string; invalid: number } | undefined {
   const status = entry.type === 'story' ? statuses[entry.id]?.[STATUS_TYPE_ID] : undefined;
   const label = status && CONTEXT_MENU_LABELS.get(status.value);
   if (!status || !label) return undefined;
+  const invalid = invalidCountOf(status);
   return { status, label: invalid > 0 ? `${label} (${invalid} invalid ${invalid === 1 ? 'response' : 'responses'})` : label, invalid };
 }
