@@ -40,7 +40,7 @@ import {
   type PanelState,
   type Report,
 } from './results.js';
-import { applyTestRun, forgetStoryRun, panelOf, ranStoryIds, type StoryPanel, type StoryRuns, type TestRunPayload } from './test-run.js';
+import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, releaseOvertaken, settleReport, startValidatingMount, type Mounts, type StoryPanel, type StoryRuns, type TestRunPayload } from './test-run.js';
 import { toggleState } from './toggle.js';
 import type { ResolvedAddonOptions } from './types.js';
 
@@ -63,6 +63,8 @@ const TEST_RUN_CHANNEL = 'storybook/test/channel';
 let panelState: PanelState = initialPanelState;
 // What the last test run found out per story. The panel shows it until the UI reports a newer result.
 let testRuns: StoryRuns = {};
+// The validating mounts that have not reported yet, so a report that a test run has overtaken doesn't replace the run.
+let mounts: Mounts = {};
 // Fed by the render phases, so Rerun is right even when the panel opens while a story renders.
 let rendering: Rendering = initialRendering;
 const subscribers = new Set<() => void>();
@@ -76,6 +78,7 @@ function receive(action: PanelAction): void {
 
 function receiveTestRun(payload: TestRunPayload): void {
   testRuns = applyTestRun(testRuns, payload);
+  mounts = overtakeMounts(mounts, payload);
   notifySubscribers();
 }
 
@@ -88,6 +91,7 @@ function forgetTestRun(storyId: string): void {
 
 function clearTestRuns(): void {
   testRuns = {};
+  mounts = releaseOvertaken(mounts);
   notifySubscribers();
 }
 
@@ -418,9 +422,17 @@ addons.register('mokapi', (api) => {
   };
   api.on(PANEL_EVENT, (action: PanelAction) => {
     receive(action);
-    // A mount that validates and a report are newer than the last test run. A mount without validation is not.
-    if (action.type === 'report' || (action.type === 'render-started' && action.testMode)) forgetTestRun(action.storyId);
-    if (action.type === 'report') updateStatuses([[action.storyId, action]]);
+    if (action.type === 'render-started' && action.testMode) {
+      // A mount that validates is newer than the last test run. A mount without validation is not.
+      mounts = startValidatingMount(mounts, action.storyId);
+      forgetTestRun(action.storyId);
+    }
+    if (action.type !== 'report') return;
+    const settled = settleReport(mounts, action.storyId);
+    mounts = settled.mounts;
+    if (settled.overtaken) return;
+    forgetTestRun(action.storyId);
+    updateStatuses([[action.storyId, action]]);
   });
   api.on(TEST_RUN_CHANNEL, ({ type, payload }: { type: string; payload: TestRunPayload }) => {
     if (type !== 'test-run-completed') return;

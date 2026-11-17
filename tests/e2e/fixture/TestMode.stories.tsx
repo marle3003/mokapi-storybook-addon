@@ -19,6 +19,19 @@ export const WarningInvalid = {
   parameters: { mokapi: { test: 'warning' }, msw: { handlers: [profileHandler(invalidProfile)] } },
 };
 
+// The response waits until a test calls `window.__releaseProfile()`, so the test decides when the mount reports.
+export const WarningHeld = {
+  parameters: {
+    mokapi: { test: 'warning' },
+    msw: {
+      handlers: [http.get('/api/profile', async () => {
+        await new Promise<void>((resolve) => { (window as { __releaseProfile?: () => void }).__releaseProfile = resolve; });
+        return HttpResponse.json(jane);
+      })],
+    },
+  },
+};
+
 export const OffInvalid = {
   parameters: { mokapi: { test: 'off' }, msw: { handlers: [profileHandler(invalidProfile)] } },
 };

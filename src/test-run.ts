@@ -67,6 +67,32 @@ export function forgetStoryRun(runs: StoryRuns, storyId: string): StoryRuns {
   return Object.fromEntries(Object.entries(runs).filter(([id]) => id !== storyId));
 }
 
+// A report belongs to its mount. When the mount started before a test run, its report is older than the run even
+// though it arrives later and must not replace the run result. A report of a mount that started after the run (or of
+// a re-render, which has no mount of its own) is newer. So the manager tracks the validating mounts that have not
+// reported yet, and which of them a run has overtaken.
+export type Mounts = Readonly<Record<string, 'validating' | 'overtaken'>>;
+
+// A new mount forgets the mark of an older one, e.g. one that was aborted and never reported.
+export const startValidatingMount = (mounts: Mounts, storyId: string): Mounts => ({ ...mounts, [storyId]: 'validating' });
+
+export function overtakeMounts(mounts: Mounts, payload: TestRunPayload): Mounts {
+  const overtaken = ranStoryIds(payload).filter((storyId) => Object.hasOwn(mounts, storyId));
+  if (overtaken.length === 0) return mounts;
+  return { ...mounts, ...Object.fromEntries(overtaken.map((storyId) => [storyId, 'overtaken'])) };
+}
+
+// Without its test runs there is nothing left to overtake: the pending report counts again.
+export const releaseOvertaken = (mounts: Mounts): Mounts =>
+  Object.fromEntries(Object.keys(mounts).map((storyId) => [storyId, 'validating']));
+
+/** The report ends the mount. `overtaken` tells that a test run is newer than it. */
+export function settleReport(mounts: Mounts, storyId: string): { mounts: Mounts; overtaken: boolean } {
+  if (!Object.hasOwn(mounts, storyId)) return { mounts, overtaken: false };
+  const { [storyId]: state, ...pending } = mounts;
+  return { mounts: pending, overtaken: state === 'overtaken' };
+}
+
 export type StoryPanel = PanelState & { fromTestRun?: true };
 
 // The result of the last test run wins over the UI state: the manager drops it when the UI reports newer results.

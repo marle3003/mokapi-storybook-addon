@@ -6,7 +6,7 @@ import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '..
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
-import { applyTestRun, forgetStoryRun, panelOf, ranStoryIds, testRunResults } from '../dist/test-run.js';
+import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, releaseOvertaken, settleReport, startValidatingMount, testRunResults } from '../dist/test-run.js';
 import { toggleState } from '../dist/toggle.js';
 import { MokapiContractError, testHook, validationHook } from '../dist/listener.js';
 import {
@@ -1862,6 +1862,52 @@ test('the panel of a story shows its test run result, otherwise what the UI repo
   assert.equal('testMode' in panelOf(ui, { 'a--one': { ...result, testMode: undefined } }, 'a--one'), false);
   // A story id is no property of `Object`.
   assert.equal(panelOf(ui, {}, 'constructor'), initialPanelState);
+});
+
+// A report belongs to its mount. When the mount started before a run, its report is older than the run.
+test('a run overtakes the report of a validating mount that has not reported yet', () => {
+  const mounts = startValidatingMount({}, 'a--one');
+  const overtaken = overtakeMounts(mounts, testRunOf([componentTest('a--one')]));
+  assert.deepEqual(settleReport(overtaken, 'a--one'), { mounts: {}, overtaken: true });
+  assert.deepEqual(mounts, { 'a--one': 'validating' });
+});
+
+test('a report without a run in between settles normally and ends the mount', () => {
+  const mounts = startValidatingMount({}, 'a--one');
+  assert.deepEqual(settleReport(mounts, 'a--one'), { mounts: {}, overtaken: false });
+});
+
+test('a report of a story that is not mounting, e.g. a re-render with changed args, is not overtaken', () => {
+  const settled = settleReport({}, 'a--one').mounts;
+  assert.deepEqual(settleReport(overtakeMounts(settled, testRunOf([componentTest('a--one')])), 'a--one'), { mounts: {}, overtaken: false });
+  assert.deepEqual(settleReport({}, 'constructor'), { mounts: {}, overtaken: false });
+});
+
+test('a run marks only the stories that ran and are still mounting', () => {
+  const mounts = startValidatingMount(startValidatingMount({}, 'a--one'), 'a--two');
+  const marked = overtakeMounts(mounts, testRunOf([componentTest('a--one'), componentTest('a--other')]));
+  assert.deepEqual(marked, { 'a--one': 'overtaken', 'a--two': 'validating' });
+  assert.equal(overtakeMounts(mounts, testRunOf([componentTest('a--other')])), mounts);
+});
+
+test('a later run while the mount is still pending keeps the mark', () => {
+  const run = testRunOf([componentTest('a--one')]);
+  const twice = overtakeMounts(overtakeMounts(startValidatingMount({}, 'a--one'), run), run);
+  assert.deepEqual(twice, { 'a--one': 'overtaken' });
+});
+
+test('a new validating mount forgets the mark of the older one', () => {
+  const overtaken = overtakeMounts(startValidatingMount({}, 'a--one'), testRunOf([componentTest('a--one')]));
+  const remounted = startValidatingMount(overtaken, 'a--one');
+  assert.deepEqual(remounted, { 'a--one': 'validating' });
+  assert.deepEqual(settleReport(remounted, 'a--one'), { mounts: {}, overtaken: false });
+});
+
+test('clearing the test runs lets the pending report count again', () => {
+  const overtaken = overtakeMounts(startValidatingMount({}, 'a--one'), testRunOf([componentTest('a--one')]));
+  const released = releaseOvertaken(overtaken);
+  assert.deepEqual(released, { 'a--one': 'validating' });
+  assert.deepEqual(settleReport(released, 'a--one'), { mounts: {}, overtaken: false });
 });
 
 // The hook contract: the listeners run inside MSW's emit and never throw, a problem is a panel notice.

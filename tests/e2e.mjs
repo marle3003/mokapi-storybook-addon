@@ -1094,7 +1094,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     // What addon-vitest's manager publishes when a run is over (`CurrentRun`), reduced to what the addon reads.
     // A real run can't be started from here, so the scenario emits the event itself.
-    const testRunEvent = () => {
+    const testRunEvent = (warned = 'profile--warning-invalid') => {
       const operation = { api: 'Profile API', method: 'GET', path: '/api/profile' };
       const entry = {
         sequence: 1,
@@ -1129,10 +1129,10 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
           unhandledErrors: [],
           coverageSummary: undefined,
           reports: {
-            'profile--warning-invalid': [{ type: 'mokapi', version: 1, status: 'warning', result: { entries: [entry], notices: [], testMode: 'warning' } }],
+            [warned]: [{ type: 'mokapi', version: 1, status: 'warning', result: { entries: [entry], notices: [], testMode: 'warning' } }],
           },
           componentTestStatuses: [
-            componentTestStatus('profile--warning-invalid', 'status-value:success'),
+            componentTestStatus(warned, 'status-value:success'),
             // A failed story has no report: the run only knows the error text.
             componentTestStatus(
               'profile--error-invalid',
@@ -1144,9 +1144,9 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
         },
       };
     };
-    const emitTestRun = (page) => page.evaluate(
+    const emitTestRun = (page, warned) => page.evaluate(
       (event) => window.__STORYBOOK_ADDONS_CHANNEL__.emit('storybook/test/channel', event),
-      testRunEvent(),
+      testRunEvent(warned),
     );
     const testRunNote = (page) => page.getByTestId('mokapi-test-run-note');
 
@@ -1221,6 +1221,42 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertNoSidebarStatus(page, failed);
       await page.getByText(/Turn on validation/).waitFor();
       assert.equal(await testRunNote(page).count(), 0);
+    });
+
+    await scenario('a test run that arrives before the report of the story that is still mounting keeps its result in the panel and the sidebar', async (page) => {
+      const held = 'profile--warning-held';
+      await openStory(page, validatingStorybook.url, { id: 'profile--error-valid' });
+      await finishedStory(page);
+      await clearAllStatusesButton(page).click({ timeout: 2000 }).catch(() => {});
+      await assertNoSidebarStatus(page, held);
+      await openMokapiPanel(page);
+
+      // The addon's own listeners are registered earlier, so when these promises resolve, the manager has handled the action.
+      await page.evaluate((storyId) => {
+        const waitFor = (type) => new Promise((resolve) => {
+          window.__STORYBOOK_ADDONS_CHANNEL__.on('mokapi/validation', (action) => {
+            if (action.type === type && action.storyId === storyId) resolve();
+          });
+        });
+        window.__mountStarted = waitFor('render-started');
+        window.__mountReported = waitFor('report');
+      }, held);
+
+      // The held response keeps the mount from reporting. Once the request is waiting, the mount has announced
+      // itself, so the run below is newer than the mount and the mount's report is older than the run.
+      await page.locator(`[id="${held}"]`).click();
+      await page.evaluate(() => window.__mountStarted);
+      await page.frame({ name: 'storybook-preview-iframe' }).waitForFunction(() => typeof window.__releaseProfile === 'function');
+      await emitTestRun(page, held);
+      await showsText(testRunNote(page), 'Result of the last test run.');
+      await assertSidebarStatus(page, held, 'Warning');
+
+      await page.frame({ name: 'storybook-preview-iframe' }).evaluate(() => window.__releaseProfile());
+      await page.evaluate(() => window.__mountReported);
+      // The mount's valid report is older than the run: the run result stays, the report does not unset the status.
+      await assertCountStays(testRunNote(page), 1);
+      await showsText(reportBadge(page), 'WARN');
+      await assertSidebarStatus(page, held, 'Warning');
     });
 
     await scenario('with test error a response that does not match the contract fails the story', async (page) => {

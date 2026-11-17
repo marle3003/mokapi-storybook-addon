@@ -437,10 +437,10 @@ Switching to another story keeps the status. **Clear all statuses** in the
 testing module removes all Mokapi statuses. Without a new report, a status stays
 when you switch validation off.
 
-**Run tests** sets Mokapi statuses as well, see [Vitest](#vitest). The latest
-result of a story wins, whether it comes from the preview or from a test run. A
-test run replaces the status of every story that took part in it. Stories
-outside the run keep theirs.
+**Run tests** sets Mokapi statuses as well, see [Vitest](#vitest). A test run
+replaces the status of every story that took part in it. Stories outside the run
+keep theirs. The status of a test run stays until you mount the story with
+validation on or the preview reports a newer result.
 
 ### Error message
 
@@ -595,11 +595,14 @@ For a story in `'error'` mode, the addon only knows the text of the error, not
 the entries. The panel then shows the `FAIL` badge and the headline, but no
 entries. Switch validation on in the toolbar to see them.
 
-The latest result wins. When you mount the story with validation on, or when the
-preview reports it, the new result replaces the one from the test run. A newer
-test run replaces a result from the preview. **Clear all statuses** removes the
-Mokapi statuses and the stored results of test runs. The results of test runs
-are kept in the browser only, so they are gone after you reload the page.
+The result of a test run stays in the panel and in the sidebar until a newer
+result replaces it: a mount of the story with validation on, or a report of the
+preview from a mount that started after the test run or from a re-render with
+changed args or globals. A report from a mount that started before the test run
+and arrives only after it doesn't replace the result. A newer test run replaces
+a result from the preview. **Clear all statuses** removes the Mokapi statuses and
+the stored results of test runs. The results of test runs are kept in the
+browser only, so they are gone after you reload the page.
 
 The Storybook test-runner (the Playwright based one, not Vitest) doesn't fail on
 contract errors anymore. Use `@storybook/addon-vitest` to fail stories in CI.
