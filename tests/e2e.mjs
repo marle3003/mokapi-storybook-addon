@@ -801,6 +801,18 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await reportHeadline(page).count(), 0);
     });
 
+    // Not in the contract, no request and no worker: nothing was checked, and Storybook still reports the story as passed.
+    await scenario('the badge shows SKIP with its headline when no response was checked against the contract', async (page) => {
+      for (const [id, mode] of [['profile--not-in-contract', 'warning'], ['profile--error-no-request', 'error'], ['profile--error-no-worker', 'error']]) {
+        await openValidated(page, id);
+        await showsText(reportBadge(page), 'SKIP');
+        await showsText(reportHeadline(page), 'No response was checked against the contract.');
+        await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS[mode]);
+        await assertStoryStaysGreen(page);
+        await assertNoSidebarStatus(page, id);
+      }
+    });
+
     await scenario('the badge shows WAIT while the story still validates', async (page) => {
       await openValidated(page, 'profile--error-delayed');
       await showsText(reportBadge(page), 'WAIT');

@@ -96,13 +96,22 @@ export function countLine(entries: Entry[]): string | undefined {
   return [validated, ...kinds].join(', ');
 }
 
-// A passed report has nothing to say beyond its badge.
-export const reportHeadline = (report: Report | undefined): string | undefined =>
-  report === undefined || report.status === 'passed' ? undefined : report.headline;
+// A passed report alone doesn't say that anything was checked: without a valid response it was skipped.
+const isSkipped = (report: Report, entries: Entry[]): boolean =>
+  report.status === 'passed' && !entries.some(({ status }) => status === 'valid');
+
+export const SKIP_HEADLINE = 'No response was checked against the contract.';
+
+// A report that passed with a valid response has nothing to say beyond its badge.
+export function reportHeadline(report: Report | undefined, entries: Entry[]): string | undefined {
+  if (report === undefined) return undefined;
+  if (isSkipped(report, entries)) return SKIP_HEADLINE;
+  return report.status === 'passed' ? undefined : report.headline;
+}
 
 // The names are Storybook's theme colors, as the Interactions panel's status badge uses them.
 export interface ReportBadge {
-  label: 'PASS' | 'WARN' | 'FAIL' | 'WAIT';
+  label: 'PASS' | 'WARN' | 'FAIL' | 'WAIT' | 'SKIP';
   status: 'positive' | 'warning' | 'negative' | 'mediumdark';
 }
 
@@ -113,9 +122,10 @@ const REPORT_BADGES: Record<ReportStatus, ReportBadge> = {
 };
 
 // `testMode` is set while validation is on: until the report exists the story is still validating.
-export function reportBadge(testMode: TestMode | undefined, report: Report | undefined): ReportBadge | undefined {
+export function reportBadge(testMode: TestMode | undefined, report: Report | undefined, entries: Entry[]): ReportBadge | undefined {
   if (testMode === undefined || testMode === 'off') return undefined;
-  return report === undefined ? { label: 'WAIT', status: 'mediumdark' } : REPORT_BADGES[report.status];
+  if (report === undefined) return { label: 'WAIT', status: 'mediumdark' };
+  return isSkipped(report, entries) ? { label: 'SKIP', status: 'mediumdark' } : REPORT_BADGES[report.status];
 }
 
 // The names are Storybook's theme colors, used by the status and the method badge.

@@ -24,6 +24,7 @@ import {
   reportStatus,
   resolveTestMode,
   sidebarStatus,
+  SKIP_HEADLINE,
   statusColor,
   statusLabel,
   statusText,
@@ -600,16 +601,36 @@ test('count line is undefined without entries', () => {
 });
 
 test('badge says WAIT until the report exists, in every mode but off', () => {
-  for (const mode of ['error', 'warning']) assert.deepEqual(reportBadge(mode, undefined), { label: 'WAIT', status: 'mediumdark' });
-  assert.equal(reportBadge('off', undefined), undefined);
-  assert.equal(reportBadge('off', { status: 'warning', headline: 'ignored' }), undefined);
-  assert.equal(reportBadge(undefined, undefined), undefined);
+  for (const mode of ['error', 'warning']) assert.deepEqual(reportBadge(mode, undefined, []), { label: 'WAIT', status: 'mediumdark' });
+  assert.equal(reportBadge('off', undefined, []), undefined);
+  assert.equal(reportBadge('off', { status: 'warning', headline: 'ignored' }, []), undefined);
+  assert.equal(reportBadge(undefined, undefined, []), undefined);
+  assert.equal(reportBadge(undefined, { status: 'passed', headline: '' }, [validEntry()]), undefined);
 });
 
 test('badge maps the report status to PASS, WARN and FAIL', () => {
-  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }), { label: 'PASS', status: 'positive' });
-  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }), { label: 'WARN', status: 'warning' });
-  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }), { label: 'FAIL', status: 'negative' });
+  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [validEntry()]), { label: 'PASS', status: 'positive' });
+  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }, [invalidEntry()]), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }, [invalidEntry()]), { label: 'FAIL', status: 'negative' });
+});
+
+test('badge says SKIP when a passed report has no valid response', () => {
+  const skip = { label: 'SKIP', status: 'mediumdark' };
+  const passed = { status: 'passed', headline: '' };
+  for (const mode of ['error', 'warning']) {
+    assert.deepEqual(reportBadge(mode, passed, []), skip);
+    assert.deepEqual(reportBadge(mode, passed, [notInContractEntry()]), skip);
+    assert.deepEqual(reportBadge(mode, passed, [notInContractEntry(), notInContractEntry()]), skip);
+  }
+});
+
+test('badge says PASS when one response is valid, whatever else was not in the contract', () => {
+  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [validEntry(), notInContractEntry()]), { label: 'PASS', status: 'positive' });
+});
+
+test('badge keeps WARN and FAIL for a failing notice without a valid response', () => {
+  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }, []), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }, [notInContractEntry()]), { label: 'FAIL', status: 'negative' });
 });
 
 test('status color follows the status group, anything outside 100-599 is gray', () => {
@@ -671,10 +692,19 @@ test('time is formatted as HH:mm:ss in local time, whatever the locale', () => {
 });
 
 test('report headline is the headline of the report for a warning and a failed report only', () => {
-  assert.equal(reportHeadline({ status: 'failed', headline: '1 response does not match the contract.' }), '1 response does not match the contract.');
-  assert.equal(reportHeadline({ status: 'warning', headline: '1 response does not match the contract.' }), '1 response does not match the contract.');
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }), undefined);
-  assert.equal(reportHeadline(undefined), undefined);
+  const invalidHeadline = '1 response does not match the contract.';
+  assert.equal(reportHeadline({ status: 'failed', headline: invalidHeadline }, [invalidEntry()]), invalidHeadline);
+  assert.equal(reportHeadline({ status: 'warning', headline: invalidHeadline }, [invalidEntry()]), invalidHeadline);
+  assert.equal(reportHeadline({ status: 'warning', headline: 'not reachable' }, []), 'not reachable');
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, [validEntry()]), undefined);
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, [validEntry(), notInContractEntry()]), undefined);
+  assert.equal(reportHeadline(undefined, []), undefined);
+});
+
+test('report headline says that no response was checked for a passed report without a valid response', () => {
+  assert.equal(SKIP_HEADLINE, 'No response was checked against the contract.');
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, []), SKIP_HEADLINE);
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, [notInContractEntry()]), SKIP_HEADLINE);
 });
 
 test('a body is cut after 10,000 characters and flagged only when something was cut', () => {
@@ -1365,9 +1395,12 @@ test('afterEach adds no report with validation off, for a disabled story or in o
 test('afterEach in error mode does not fail without a worker, without requests or for results outside the contract', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => Response.json(answers.noOperation));
   const withoutWorker = testContext(undefined, failingMode);
-  validationHook(withoutWorker, hookOptions(recorder()));
-  await testHook(withoutWorker, hookOptions(recorder()));
+  const workerPanel = recorder();
+  validationHook(withoutWorker, hookOptions(workerPanel));
+  await testHook(withoutWorker, hookOptions(workerPanel));
   assert.equal(withoutWorker.reports[0].status, 'passed');
+  assert.equal(workerPanel.actions.at(-1).type, 'report');
+  assert.equal(workerPanel.actions.at(-1).status, 'passed');
 
   const worker = fakeWorker();
   const noRequest = testContext(worker, failingMode);
@@ -1383,6 +1416,8 @@ test('afterEach in error mode does not fail without a worker, without requests o
   worker.mocked(getProfile(), jsonResponse());
   await finished;
   assert.equal(notInContract.reports[0].status, 'passed');
+  assert.equal(panel.actions.at(-1).type, 'report');
+  assert.equal(panel.actions.at(-1).status, 'passed');
 });
 
 test('without context.msw nothing happens while validation is off', () => {

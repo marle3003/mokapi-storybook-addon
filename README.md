@@ -229,11 +229,12 @@ are not in the contract and not-reachable entries are not counted.
 While validation is on, the panel starts with a toolbar. From left to right it
 has:
 
-- A report badge: `PASS`, `WARN`, `FAIL` or `WAIT`. Hover it to see the test mode
-  of the story. See the table below.
-- A headline in bold, only for `WARN` and `FAIL`: the headline of the
-  [error message](#error-message), for example
-  `1 response does not match the contract.`
+- A report badge: `PASS`, `WARN`, `FAIL`, `SKIP` or `WAIT`. Hover it to see the
+  test mode of the story. See the table below.
+- A headline in bold, only for `WARN`, `FAIL` and `SKIP`. For `WARN` and `FAIL` it
+  is the headline of the [error message](#error-message), for example
+  `1 response does not match the contract.` For `SKIP` it is always
+  `No response was checked against the contract.`
 - The counts in one line, for example
   `2 responses validated, 1 valid, 1 invalid`. The line counts all entries since
   the story was mounted and updates as results come in. Kinds that don't occur
@@ -248,7 +249,10 @@ The badge depends on the test mode of the story, see
 | `WAIT` | The story is still waiting for its requests and their validation |
 | `FAIL` | Test mode `'error'` and a failing result |
 | `WARN` | Test mode `'warning'` and a failing result |
-| `PASS` | No failing result |
+| `PASS` | No failing result and at least one valid response |
+| `SKIP` | No failing result and no valid response: every response is not in the contract, the story sent no request, or the MSW worker is missing |
+
+`SKIP` is shown in the panel only. Storybook still reports the story as passed.
 
 In test mode `'off'` and for a story with `parameters.mokapi.disable` there is no
 badge. If a story is aborted before it reports, for example because you switch

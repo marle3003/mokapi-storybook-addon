@@ -346,8 +346,8 @@ function RerunButton() {
 
 function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: string }) {
   const { entries, testMode, report } = state;
-  const badge = reportBadge(testMode, report);
-  const headline = reportHeadline(report);
+  const badge = reportBadge(testMode, report, entries);
+  const headline = reportHeadline(report, entries);
   const counts = countLine(entries);
   return (
     <ToolbarRow>
