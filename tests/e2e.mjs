@@ -78,6 +78,20 @@ function mokapiBinary() {
   return mokapiRequire(`@go-mokapi/${process.platform}-${process.arch}`);
 }
 
+const STOP_GRACE_MS = 5000;
+
+// SIGTERM, then SIGKILL after the grace period. The timer is cancelled when the process exits,
+// so it doesn't keep the event loop alive. SIGKILL is sent in any case, because a Storybook
+// leader can exit on SIGTERM while other processes of its group still hold the port.
+async function stopProcess(stopped, kill) {
+  kill('SIGTERM');
+  const grace = new AbortController();
+  await Promise.race([stopped, setTimeout(STOP_GRACE_MS, undefined, { signal: grace.signal })]);
+  grace.abort();
+  kill('SIGKILL');
+  await stopped;
+}
+
 // Starts Mokapi in directory and waits until isReady() passes, i.e. the contract is loaded.
 async function startMokapi(directory, isReady) {
   // Mokapi rejects unknown MOKAPI_* environment variables, so MOKAPI_BIN must not reach it.
@@ -90,10 +104,7 @@ async function startMokapi(directory, isReady) {
     child.once('error', resolve);
     child.once('exit', resolve);
   });
-  const stop = async () => {
-    if (child.exitCode === null) child.kill('SIGTERM');
-    await stopped;
-  };
+  const stop = () => stopProcess(stopped, (signal) => child.kill(signal));
   const deadline = Date.now() + 15000;
   while (true) {
     if (startupError) throw startupError;
@@ -135,11 +146,7 @@ async function startStorybook({ port, env, browser }) {
   const killGroup = (signal) => {
     try { process.kill(-child.pid, signal); } catch { /* the group is already gone */ }
   };
-  const stop = async () => {
-    killGroup('SIGTERM');
-    await Promise.race([stopped, setTimeout(5000)]);
-    killGroup('SIGKILL');
-  };
+  const stop = () => stopProcess(stopped, killGroup);
   const fail = async (message, cause) => {
     await stop();
     throw new Error(`${message}\n${output.slice(-4000)}`, { cause });
@@ -363,17 +370,30 @@ async function runStoriesWithVitest(env, outputFile, storyNames) {
   };
 }
 
-// Validation runs after the response, so no request may show up shortly after the story rendered.
+// Validation runs after the response, so proving that nothing more arrives needs a fixed window.
+const QUIET_WINDOW_MS = 1500;
+
 async function assertNothingSent(requests) {
-  await setTimeout(1000);
+  await setTimeout(QUIET_WINDOW_MS);
   assert.equal(requests.length, 0);
 }
+
+async function assertCountStays(locator, count) {
+  await setTimeout(QUIET_WINDOW_MS);
+  assert.equal(await locator.count(), count);
+}
+
+// The animation of the `Animated` story runs 8 s, but waitForAnimations gives up after 5 s, so the old
+// render leaves `completing` 5 s after it started. Switch late enough that the re-render finishes
+// clearly after it, but before the old render leaves `completing`.
+const SWITCH_INTO_COMPLETING_MS = 1500;
 
 test('Storybook user validates the MSW responses of a story against the OpenAPI contract', { timeout: 300000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'mokapi-storybook-e2e-'));
   let failureDirectory;
   let stopMokapi;
   let browser;
+  let testFailed = false;
   const storybooks = [];
   try {
     const [apiPort, dashboardPort, storybookPort, validatingStorybookPort, failingStorybookPort] = await unusedPorts(5);
@@ -436,6 +456,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       try {
         await run(page, context);
       } catch (error) {
+        // A failed subtest doesn't reject into the outer test, so it marks the test as failed itself.
+        testFailed = true;
         const panel = await entries(page).allTextContents().catch(() => []);
         panel.forEach((text) => log(`[panel entry] ${text}`));
         await keepFailureArtifacts(name, page, consoleLines);
@@ -547,8 +569,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await switchValidation(page, 'on');
       await openMokapiPanel(page);
       await entries(page, 'valid').first().waitFor();
-      await setTimeout(1500);
-      assert.equal(await entries(page).count(), 1);
+      await assertCountStays(entries(page), 1);
       assert.equal(await preview.evaluate(() => window.__marker), 'same document');
     });
 
@@ -570,9 +591,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await preview.waitForFunction(() => window.__events.at(-1) === 'completing');
       // Storybook emits its own `globalsUpdated` while the story starts, so look only after this point.
       const beforeSwitch = await preview.evaluate(() => window.__events.length);
-      // The old render times out in `completing` 5 s after it started. Switch late enough that the re-render
-      // finishes clearly after it, but before the old render leaves `completing`.
-      await setTimeout(1500);
+      await setTimeout(SWITCH_INTO_COMPLETING_MS);
       await switchValidation(page, 'on');
       // The remount is the second `loading` after the switch (the first is the re-render).
       await preview.waitForFunction((from) => {
@@ -581,8 +600,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       }, beforeSwitch);
       await openMokapiPanel(page);
       await entries(page, 'valid').first().waitFor();
-      await setTimeout(1500);
-      assert.equal(await entries(page).count(), 1);
+      await assertCountStays(entries(page), 1);
       assert.equal(await preview.evaluate(() => window.__marker), 'same document');
       // Without this check the switch may land in `afterEach` or `finished` and exercise another path.
       const events = await preview.evaluate(() => window.__events);
@@ -1325,11 +1343,31 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await reportBadge(page).waitFor();
       await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
     });
+  } catch (error) {
+    testFailed = true;
+    throw error;
   } finally {
     if (failureDirectory) console.error(`E2E failure artifacts kept in ${failureDirectory}`);
-    if (browser) await browser.close();
-    await Promise.all(storybooks.map((storybook) => storybook.stop()));
-    if (stopMokapi) await stopMokapi();
-    await rm(directory, { recursive: true, force: true });
+    // Every teardown step runs, even when an earlier one fails. The directory goes last, because Mokapi runs in it.
+    const stops = await Promise.allSettled([
+      browser?.close(),
+      ...storybooks.map((storybook) => storybook.stop()),
+      stopMokapi?.(),
+    ]);
+    const teardownErrors = stops.filter(({ status }) => status === 'rejected').map(({ reason }) => reason);
+    try {
+      await rm(directory, { recursive: true, force: true });
+    } catch (error) {
+      teardownErrors.push(error);
+    }
+    // A throw in `finally` replaces the error of the test, so a failed test only logs the teardown errors.
+    if (testFailed) {
+      teardownErrors.forEach((error) => console.error('E2E teardown failed:', error));
+    } else if (teardownErrors.length > 0) {
+      // node:test prints only message and stack of an error, so the messages of the members go into the message.
+      // eslint-disable-next-line no-unsafe-finally -- testFailed is false here, so no error of the test is replaced
+      throw new AggregateError(teardownErrors,
+        `E2E teardown failed: ${teardownErrors.map((error) => error.message).join('; ')}`);
+    }
   }
 });
