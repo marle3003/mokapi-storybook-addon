@@ -699,6 +699,7 @@ result, see [Failing stories](#failing-stories):
 | Mokapi's message, for example for an unknown API | `parameters.mokapi.api` names an API that Mokapi doesn't serve. Use the `info.title` of your contract |
 | `Mokapi answered HTTP <status>: <message>` | Any other unexpected answer from Mokapi. Mokapi's message is added if it sent one |
 | `Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.` | A story, component or preview sets an invalid test mode. The story uses `defaultTest` |
+| `Mokapi: could not read the mocked request or response: <error message>` | The addon could not copy the mocked request or response, or could not show the result. Nothing was validated for that request. The error message tells why |
 | `Mokapi validation did not finish within 4 s (<method> <path>).` | MSW or Mokapi did not answer in time. One notice per unfinished request |
 | ``MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.`` | The story has no MSW worker. Use `mswLoader` or set `context.msw` in your own loader |
 

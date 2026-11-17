@@ -30,7 +30,7 @@ import {
   testModeText,
   truncateBody,
 } from '../dist/report.js';
-import { classify, sendValidation, serializePair } from '../dist/validation.js';
+import { classify, sendValidation, serializePair, unreadableMessage } from '../dist/validation.js';
 
 test('options default to the local Mokapi dashboard and validation off', () => {
   assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'warning' });
@@ -1793,4 +1793,127 @@ test('the panel of a story shows its test run result, otherwise what the UI repo
   assert.equal('testMode' in panelOf(ui, { 'a--one': { ...result, testMode: undefined } }, 'a--one'), false);
   // A story id is no property of `Object`.
   assert.equal(panelOf(ui, {}, 'constructor'), initialPanelState);
+});
+
+// The hook contract: the listeners run inside MSW's emit and never throw, a problem is a panel notice.
+// What a clone of a consumed or locked body does, e.g. `TypeError: Response body is already used`.
+const unclonable = (message) => ({ clone() { throw new TypeError(message); } });
+const unclonableResponse = () => Object.assign(jsonResponse(), unclonable('Response body is already used'));
+const unclonableRequest = () => Object.assign(getProfile(), unclonable('Request body is already used'));
+const readNotice = ({ actions }) => actions.find(({ type }) => type === 'notice');
+
+test('listener does not throw out of the emit when the response cannot be cloned, and shows a notice', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), hookOptions(panel));
+  const { renderId } = panel.actions[0];
+  assert.doesNotThrow(() => worker.mocked(getProfile(), unclonableResponse()));
+  await settled();
+  assert.equal(fetch.mock.callCount(), 0);
+  const notice = readNotice(panel);
+  assert.equal(notice?.renderId, renderId);
+  assert.equal(notice?.notice.kind, 'config-error');
+  assert.match(notice?.notice.message, /^Mokapi: could not read the mocked request or response: .*already used/);
+});
+
+test('listener does not throw out of the emit when the request cannot be cloned, and shows a notice', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), hookOptions(panel));
+  assert.doesNotThrow(() => worker.mocked(unclonableRequest(), jsonResponse()));
+  await settled();
+  assert.equal(readNotice(panel)?.notice.kind, 'config-error');
+});
+
+test('listener causes no unhandled rejection when showing a result throws, and still shows a notice', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on('unhandledRejection', onRejection);
+  t.after(() => process.off('unhandledRejection', onRejection));
+  const panel = recorder();
+  const emit = (action) => {
+    panel.emit(action);
+    if (action.type === 'result') throw new Error('channel closed');
+  };
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), { emit, dashboardUrl, defaultTest: 'warning' });
+  worker.mocked(getProfile(), jsonResponse());
+  await settled();
+  await settled();
+  assert.deepEqual(rejections, []);
+  assert.match(readNotice(panel)?.notice.message ?? '', /could not read the mocked request or response: channel closed/);
+});
+
+test('afterEach does not wait for the timeout for a request whose pair could not be read', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const panel = recorder();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile());
+  try { worker.mocked(getProfile(), unclonableResponse()); } catch { /* the first test covers the throw */ }
+  let finished = false;
+  const done = testHook(context, hookOptions(panel)).catch(() => {}).then(() => { finished = true; });
+  await tick(t, 100);
+  await settled();
+  assert.equal(finished, true, 'afterEach is still waiting for the 4 s timeout');
+  await done;
+  assert.equal(panel.actions.some(({ type, notice }) => type === 'notice' && notice.kind === 'timeout'), false);
+  assert.equal(context.reports[0]?.status, 'failed');
+});
+
+test('the notice text names the message of an Error and the text of anything else that was thrown', () => {
+  assert.equal(unreadableMessage(new Error('boom')), 'Mokapi: could not read the mocked request or response: boom');
+  assert.equal(unreadableMessage('boom'), 'Mokapi: could not read the mocked request or response: boom');
+  assert.equal(unreadableMessage(undefined), 'Mokapi: could not read the mocked request or response: undefined');
+});
+
+test('listener shows a notice when something other than an Error is thrown', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker), hookOptions(panel));
+  worker.mocked(getProfile(), Object.assign(jsonResponse(), { clone() { throw 'locked'; } }));
+  await settled();
+  assert.equal(readNotice(panel)?.notice.message, 'Mokapi: could not read the mocked request or response: locked');
+});
+
+test('listener causes no unhandled rejection and throws nothing when every emit throws', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on('unhandledRejection', onRejection);
+  t.after(() => process.off('unhandledRejection', onRejection));
+  const worker = fakeWorker();
+  const context = storyContext(worker);
+  // The hook's own emits (render-started) happen before the listener runs, so only the listener's emits throw.
+  let broken = false;
+  const emit = () => { if (broken) throw new Error('channel closed'); };
+  validationHook(context, { emit, dashboardUrl, defaultTest: 'warning' });
+  broken = true;
+  assert.doesNotThrow(() => worker.mocked(getProfile(), jsonResponse()));
+  assert.doesNotThrow(() => worker.mocked(getProfile(), unclonableResponse()));
+  await settled();
+  await settled();
+  assert.deepEqual(rejections, []);
+});
+
+test('an unreadable pair fails the story in mode error with the notice as headline, and warns in mode warning', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  for (const [mode, status] of [['error', 'failed'], ['warning', 'warning']]) {
+    const worker = fakeWorker();
+    const panel = recorder();
+    const context = testContext(worker, { mokapi: { test: mode } });
+    validationHook(context, hookOptions(panel));
+    worker.started(getProfile());
+    worker.mocked(getProfile(), unclonableResponse());
+    await testHook(context, hookOptions(panel)).catch(() => {});
+    assert.equal(context.reports[0]?.status, status);
+    const report = panel.actions.find(({ type }) => type === 'report');
+    assert.match(report.headline, /^Mokapi: could not read the mocked request or response: .*already used/);
+    assert.equal(report.status, status);
+  }
 });

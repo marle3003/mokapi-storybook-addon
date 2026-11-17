@@ -26,6 +26,9 @@ export type ValidationOutcome =
   | { status: 'not-in-contract'; errors: ValidationError[] }
   | { status: 'unreachable' | 'endpoint-missing' | 'config-error'; message: string };
 
+export const unreadableMessage = (error: unknown): string =>
+  `Mokapi: could not read the mocked request or response: ${error instanceof Error ? error.message : String(error)}`;
+
 // A body that was already consumed or cannot be read must not stop the validation.
 async function readText(message: Request | Response): Promise<string> {
   try {

@@ -13,7 +13,7 @@ import {
 } from './report.js';
 import { initialPanelState, invalidCount, reducePanel, type Entry, type MessageDetails, type PanelAction, type PanelState } from './results.js';
 import type { MokapiStoryParameters, TestMode } from './types.js';
-import { classify, sendValidation, serializePair, type ValidationOutcome, type ValidationPayload } from './validation.js';
+import { classify, sendValidation, serializePair, unreadableMessage, type ValidationOutcome, type ValidationPayload } from './validation.js';
 
 const WORKER_MISSING = 'MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.';
 
@@ -177,8 +177,10 @@ function validate({ request, response, requestId }: MockedResponse, { emit, dash
   if (!render.sending) return;
   const sequence = ++capturedCount;
   const time = Date.now();
-  // Cloned now: the application gets the original pair and may read it any moment.
-  void serializePair(request.clone(), response.clone(), render.api).then(async (payload) => {
+  // The async function clones first, in this tick: the application gets the original pair and may read it any
+  // moment. A throw (also from showing the result) becomes a notice and still settles the request.
+  void (async () => {
+    const payload = await serializePair(request.clone(), response.clone(), render.api);
     const settle = (answer: unknown) => classify(dashboardUrl, answer);
     const outcome = await sendValidation(dashboardUrl, payload).then(settle, settle);
     toPanelActions(outcome, render.renderId, {
@@ -190,7 +192,11 @@ function validate({ request, response, requestId }: MockedResponse, { emit, dash
       request: detailsOf(payload.request),
       response: detailsOf(payload.response),
     }, dashboardUrl).forEach((action) => announce(render, emit, action));
-  }).finally(() => inFlight?.finish());
+  })()
+    .catch((error: unknown) => announce(render, emit, { type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: unreadableMessage(error) } }))
+    // Nothing may leave the listener, not even a failing emit of the notice.
+    .catch(() => {})
+    .finally(() => inFlight?.finish());
 }
 
 function observe(worker: MswWorker, options: HookOptions): void {
