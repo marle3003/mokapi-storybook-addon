@@ -6,7 +6,7 @@ import { initialPanelState, invalidCount, reducePanel, resultsOfStory } from '..
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
-import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, releaseOvertaken, settleReport, startValidatingMount, testRunResults } from '../dist/test-run.js';
+import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, readTestRun, releaseOvertaken, settleReport, startValidatingMount, testRunResults } from '../dist/test-run.js';
 import { toggleState } from '../dist/toggle.js';
 import { MokapiContractError, testHook, validationHook } from '../dist/listener.js';
 import {
@@ -1750,6 +1750,36 @@ test('a story change or another story finishing cancels the pending remount', ()
 const mokapiReport = (status, result = { entries: [invalidEntry()], notices: [], testMode: 'warning' }) => ({ type: 'mokapi', version: 1, status, result });
 const componentTest = (storyId, value = 'status-value:success', description = '') => ({ storyId, typeId: 'storybook/component-test', value, title: 'Component tests', description });
 const testRunOf = (statuses, reports = {}) => ({ componentTestStatuses: statuses, reports, storyIds: undefined });
+
+// addon-vitest owns the payload and may change it: the manager reads it through `readTestRun`, which tells whether it
+// has the shape the addon reads, so a listener on the channel never throws.
+const malformedTestRuns = {
+  'no payload': undefined,
+  'null': null,
+  'an empty object': {},
+  'statuses that are no array': { componentTestStatuses: 'a--one', reports: {} },
+  'no reports': { componentTestStatuses: [componentTest('a--one')] },
+  'reports that are null': { componentTestStatuses: [componentTest('a--one')], reports: null },
+  'a status without a story id': { componentTestStatuses: [{ typeId: 'storybook/component-test' }], reports: {} },
+  'a status with a story id that is no string': { componentTestStatuses: [{ storyId: 1 }], reports: {} },
+  'reports of a story that are no array': { componentTestStatuses: [componentTest('a--one')], reports: { 'a--one': {} } },
+  'a status with a description that is no string': { componentTestStatuses: [{ storyId: 'a--one', description: 5 }], reports: {} },
+  'a report that is null': { componentTestStatuses: [componentTest('a--one')], reports: { 'a--one': [null] } },
+  'a status that is null': { componentTestStatuses: [null], reports: {} },
+};
+
+test('a test run payload that is not shaped as expected is not read', () => {
+  for (const [name, payload] of Object.entries(malformedTestRuns)) {
+    assert.equal(readTestRun(payload), undefined, name);
+  }
+});
+
+test('a test run payload with the expected shape is read as it is', () => {
+  const payload = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('warning')] });
+  assert.equal(readTestRun(payload), payload);
+  const empty = testRunOf([]);
+  assert.equal(readTestRun(empty), empty);
+});
 
 test('a test run result of a warning report keeps its entries, notices and test mode and has the headline of the entries', () => {
   const result = { entries: [invalidEntry()], notices: [panelNotice('timeout')], testMode: 'warning' };

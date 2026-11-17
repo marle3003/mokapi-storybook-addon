@@ -40,7 +40,7 @@ import {
   type PanelState,
   type Report,
 } from './results.js';
-import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, releaseOvertaken, settleReport, startValidatingMount, type Mounts, type StoryPanel, type StoryRuns, type TestRunPayload } from './test-run.js';
+import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, readTestRun, releaseOvertaken, settleReport, startValidatingMount, type Mounts, type StoryPanel, type StoryRuns, type TestRunPayload } from './test-run.js';
 import { toggleState } from './toggle.js';
 import type { ResolvedAddonOptions } from './types.js';
 
@@ -434,10 +434,11 @@ addons.register('mokapi', (api) => {
     forgetTestRun(action.storyId);
     updateStatuses([[action.storyId, action]]);
   });
-  api.on(TEST_RUN_CHANNEL, ({ type, payload }: { type: string; payload: TestRunPayload }) => {
-    if (type !== 'test-run-completed') return;
-    receiveTestRun(payload);
-    updateStatuses(ranStoryIds(payload).map((storyId) => [storyId, testRuns[storyId]?.report]));
+  api.on(TEST_RUN_CHANNEL, ({ type, payload }: { type: string; payload: unknown }) => {
+    const run = type === 'test-run-completed' ? readTestRun(payload) : undefined;
+    if (run === undefined) return;
+    receiveTestRun(run);
+    updateStatuses(ranStoryIds(run).map((storyId) => [storyId, testRuns[storyId]?.report]));
   });
   const openPanel = (): void => {
     api.setSelectedPanel(PANEL_ID);

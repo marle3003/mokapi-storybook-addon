@@ -10,6 +10,17 @@ export interface TestRunPayload {
   reports: Record<string, { type: string; version?: unknown; status?: unknown; result?: unknown }[] | undefined>;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+// addon-vitest is no dependency of this addon and may change its payload, so the manager reads it only when it has
+// the shape this file reads.
+export const readTestRun = (payload: unknown): TestRunPayload | undefined =>
+  isRecord(payload)
+  && Array.isArray(payload.componentTestStatuses) && payload.componentTestStatuses.every((status) => isRecord(status) && typeof status.storyId === 'string' && (status.description === undefined || typeof status.description === 'string'))
+  && isRecord(payload.reports) && Object.values(payload.reports).every((reports) => reports === undefined || (Array.isArray(reports) && reports.every(isRecord)))
+    ? (payload as unknown as TestRunPayload)
+    : undefined;
+
 /** What the last test run found out about a story: its Mokapi report with the entries and notices behind it. */
 export interface StoryRun {
   report: Report;
