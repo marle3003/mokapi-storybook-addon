@@ -975,6 +975,40 @@ test('the 500 that MSW answers for a throwing handler is not validated', async (
   assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started', 'report']);
 });
 
+test('a mocked network error (HttpResponse.error()) is not sent to Mokapi and shows no notice', async (t) => {
+  // Mokapi answers 400 for the status 0 of a network error, which would show as a misleading config error.
+  const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('status code must be between 100 and 599', { status: 400 }));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile(), 'network-error');
+  const finished = testHook(context, hookOptions(panel));
+  worker.mocked(getProfile(), Response.error(), 'network-error');
+  await finished;
+  await settled();
+  assert.equal(fetch.mock.callCount(), 0);
+  assert.equal(context.reports[0].status, 'passed');
+  assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started', 'report']);
+});
+
+test('a network error does not stop the next mocked response of the render from being validated', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile(), 'network-error');
+  worker.started(new Request('http://localhost:6006/api/orders'), 'orders');
+  const finished = testHook(context, hookOptions(panel));
+  worker.mocked(getProfile(), Response.error(), 'network-error');
+  worker.mocked(new Request('http://localhost:6006/api/orders'), jsonResponse(), 'orders');
+  await finished;
+  await settled();
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(context.reports[0].result.entries.length, 1);
+});
+
 test('a validation that does not finish within 4 s fails with one notice per request', async (t) => {
   underVitest(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });

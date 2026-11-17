@@ -44,7 +44,8 @@ shows the result in the panel. The addon never starts Mokapi or MSW and imports
 nothing from `msw`.
 
 Only responses from your handlers are validated. Requests that you pass through
-with `passthrough()` or that no handler matches are not sent.
+with `passthrough()`, that no handler matches or that you answer with
+`HttpResponse.error()` are not sent.
 
 ## Requirements
 
@@ -740,7 +741,8 @@ validation off, a story without a worker runs without any message.
   contract error. The Storybook test-runner doesn't, see [Vitest](#vitest).
 - If a handler throws, MSW answers with its own 500. The addon doesn't validate
   that response.
-- Only responses from MSW handlers are validated, not `passthrough()` or
+- Only responses from MSW handlers are validated, not `passthrough()`,
+  `HttpResponse.error()` (a network error has no HTTP response) or
   unhandled requests.
 - The addon needs a worker (or server) with MSW's `events.on` in `context.msw`.
 - Mokapi validates the request and response pair against the contract. It does

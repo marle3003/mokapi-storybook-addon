@@ -169,7 +169,10 @@ function toPanelActions(
 // The panel shows the pair as sent to Mokapi, with the bodies cut: Mokapi gets the full payload.
 const detailsOf = ({ headers, body }: Pick<ValidationPayload['request'], 'headers' | 'body'>): MessageDetails => ({ headers, ...truncateBody(body) });
 
-function validate({ request, response, requestId }: MockedResponse, { emit, dashboardUrl }: HookOptions): void {
+function validate(mocked: MockedResponse, { emit, dashboardUrl }: HookOptions): void {
+  const { request, response, requestId } = mocked;
+  // HttpResponse.error() is a network error (status 0), not an HTTP response Mokapi could validate.
+  if (response.type === 'error') return dropRequest(mocked);
   if (thrownRequests.delete(requestId)) return;
   const render = startedIn.get(requestId) ?? current;
   const inFlight = render.inFlight.get(requestId);
