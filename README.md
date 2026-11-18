@@ -476,6 +476,37 @@ replaces the status of every story that took part in it. Stories outside the run
 keep theirs. The status of a test run stays until you mount the story with
 validation on or the preview reports a newer result.
 
+#### Run tests widget
+
+The testing module below the sidebar has the same row **Contract**. It sits
+directly below the rows of `@storybook/addon-vitest` (Interactions, Coverage
+and, with `@storybook/addon-a11y`, Accessibility) without a divider or heading, so it reads
+as one more row of that block.
+The widget is part of the dev server only, like the context menu.
+
+The checkbox shows whether **Run tests** validates contracts. It is checked when
+`defaultValidation` is `true` and unchecked otherwise, and it is disabled, because
+you can't switch it here. Hover it to see the text. Set `defaultValidation: true`
+to have the tests check contracts, see [Vitest](#vitest).
+
+The button has the same states, dot, number and texts as the
+[context menu](#context-menu), but it covers all stories of the Storybook, as a
+component or group row does: the worst status wins and the number is the sum of
+the invalid responses. Its tooltips are always the fixed texts, such as
+`Contract validation failed`, also when a single story fails. A click selects a
+story and opens the **Mokapi** panel. The story is the first one with an error,
+otherwise the first with a warning, otherwise the first that passed, in the order
+of the sidebar.
+
+The row updates when a test run ends and when you click **Clear all statuses**,
+which turns it gray. It shows no spinner while a run is in progress and keeps the
+previous result until the new one arrives.
+
+Storybook draws a divider below each box of the testing module. The addon removes
+the divider between addon-vitest's rows and **Contract** with a CSS rule on the
+box's `data-module-id`. If the addon is registered before `@storybook/addon-vitest`
+in `.storybook/main.ts`, Mokapi's box comes first and Storybook's divider stays.
+
 ### Error message
 
 The error message looks like this. Under Vitest a failed story throws it as a
@@ -617,7 +648,9 @@ the Mokapi statuses in the sidebar:
 - Stories that didn't take part in the run keep their status.
 
 The description of the status is the headline (`All responses match the contract.`
-for a pass). The **Contract** row in the context menu opens the **Mokapi** panel.
+for a pass). The **Contract** row in the context menu and in the **Run tests**
+widget opens the **Mokapi** panel, see [Run tests widget](#run-tests-widget). The
+widget row shows the result right after the run.
 
 The panel shows the result of the story as it does after a validation in the
 preview: badge, headline, counts, notices and entries with their Request /
@@ -778,9 +811,13 @@ validation off, a story without a worker runs without any message.
   a static build live in the browser and are gone after a reload. With
   `storybook dev` they survive a reload and stay until the dev server stops.
 - The addon registers a test provider so that **Clear all statuses** removes the
-  Mokapi statuses. Because of it, the **Run tests** widget shows a row
-  "Mokapi contract validation" in every project that uses the addon. Without
+  Mokapi statuses. Because of it, the **Run tests** widget shows the row
+  **Contract** in every project that uses the addon. Without
   `@storybook/addon-vitest`, **Run tests** does nothing for Mokapi.
+- The **Contract** row of the **Run tests** widget removes the divider above it
+  with a CSS rule that relies on Storybook's markup (`data-module-id`). A
+  Storybook upgrade can bring the divider back. The checkbox only shows
+  `defaultValidation` and can't be switched.
 - Only `@storybook/addon-vitest` (Vitest browser mode) fails a story on a
   contract error. The Storybook test-runner doesn't, see [Vitest](#vitest).
 - If a handler throws, MSW answers with its own 500. The addon doesn't validate

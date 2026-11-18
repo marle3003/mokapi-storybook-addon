@@ -269,16 +269,15 @@ function invalidCountOf({ data }: Status): number {
 const invalidLabel = (label: string, invalid: number): string =>
   invalid > 0 ? `${label} (${invalid} invalid ${invalid === 1 ? 'response' : 'responses'})` : label;
 
-// The row "Contract" in the sidebar's context menu, like addon-vitest's Interactions row: every story, component and
-// group has one, a docs entry has none. A component or group shows the worst Mokapi status of its leaf stories and
-// the sum of their invalid responses, and its button opens the first story of that status.
-export function contextMenuRow(
-  entry: { type: string; id: string },
-  leafStoryIds: readonly string[],
+// The Contract row over some stories: the worst Mokapi status wins, the number is the sum of the failing stories'
+// invalid responses and the button opens the first story (in the order of `storyIds`) of the winning status.
+// A single story shows its own headline as tooltip, when the caller asks for it.
+function contractRow(
+  storyIds: readonly string[],
   statuses: StatusesByStoryIdAndTypeId,
-): ContextMenuRow | undefined {
-  if (entry.type === 'docs') return undefined;
-  const leaves = leafStoryIds.flatMap((storyId) => {
+  withStoryTooltip: boolean,
+): ContextMenuRow {
+  const leaves = storyIds.flatMap((storyId) => {
     const status = statuses[storyId]?.[STATUS_TYPE_ID];
     return status ? [{ storyId, status }] : [];
   });
@@ -290,8 +289,29 @@ export function contextMenuRow(
   return {
     value,
     label: invalidLabel(label, invalid),
-    tooltip: (entry.type === 'story' && isFailing(value) && status.description) || tooltip,
+    tooltip: (withStoryTooltip && isFailing(value) && status.description) || tooltip,
     invalid,
     target: storyId,
   };
 }
+
+// The row "Contract" in the sidebar's context menu, like addon-vitest's Interactions row: every story, component and
+// group has one, a docs entry has none. A component or group aggregates its leaf stories.
+export function contextMenuRow(
+  entry: { type: string; id: string },
+  leafStoryIds: readonly string[],
+  statuses: StatusesByStoryIdAndTypeId,
+): ContextMenuRow | undefined {
+  if (entry.type === 'docs') return undefined;
+  return contractRow(leafStoryIds, statuses, entry.type === 'story');
+}
+
+// The row "Contract" in the Run tests widget: all stories of the Storybook, the tooltips are the fixed texts.
+export const widgetRow = (storyIds: readonly string[], statuses: StatusesByStoryIdAndTypeId): ContextMenuRow =>
+  contractRow(storyIds, statuses, false);
+
+// The checkbox in the widget only shows whether a test run checks contracts, it can't be switched there.
+export const contractCheckboxTooltip = (defaultValidation: boolean): string =>
+  defaultValidation
+    ? 'Contract validation runs with the tests (defaultValidation is on).'
+    : 'Contract validation is off in test runs. Set defaultValidation: true to check contracts.';

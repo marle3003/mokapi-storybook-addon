@@ -12,8 +12,8 @@ export function managerEntries(entries: string[] = []): string[] {
 }
 
 export function managerHead(head = '', options?: Partial<MokapiAddonOptions>): string {
-  const { dashboardUrl } = resolveOptions(options);
-  const panelOptions = JSON.stringify({ dashboardUrl }).replace(/</g, '\\u003c');
+  const { dashboardUrl, defaultValidation } = resolveOptions(options);
+  const panelOptions = JSON.stringify({ dashboardUrl, defaultValidation }).replace(/</g, '\\u003c');
   return `${head}\n<script>globalThis.__MOKAPI_PANEL_OPTIONS__ = ${panelOptions};</script>`;
 }
 

@@ -1,17 +1,18 @@
 /** @jsxRuntime classic */
 // The Storybook manager provides `react` but not `react/jsx-runtime`, so this file must not use the automatic runtime.
-import React, { useSyncExternalStore, type ReactNode } from 'react';
-import { addons, experimental_getStatusStore, types, useGlobals, useStorybookApi, useStorybookState } from 'storybook/manager-api';
+import React, { useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { addons, experimental_getStatusStore, experimental_useStatusStore, types, useGlobals, useStorybookApi, useStorybookState } from 'storybook/manager-api';
 import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDER_PHASE_CHANGED } from 'storybook/internal/core-events';
-import { ActionList, Badge, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
+import { ActionList, Badge, Form, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
 import { CheckIcon, CircleHollowIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
-import { styled, useTheme } from 'storybook/theming';
+import { Global, styled, useTheme } from 'storybook/theming';
 import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
 import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
 import {
   BODY_LIMIT,
   contextMenuRow,
   type ContextMenuRow,
+  contractCheckboxTooltip,
   countLine,
   formatBody,
   formatTime,
@@ -27,6 +28,7 @@ import {
   testModeText,
   type BadgeColor,
   type ReportBadge,
+  widgetRow,
 } from './report.js';
 import {
   PANEL_EVENT,
@@ -46,7 +48,7 @@ import type { ResolvedAddonOptions } from './types.js';
 
 declare global {
   interface Window {
-    __MOKAPI_PANEL_OPTIONS__?: Pick<ResolvedAddonOptions, 'dashboardUrl'>;
+    __MOKAPI_PANEL_OPTIONS__?: Pick<ResolvedAddonOptions, 'dashboardUrl' | 'defaultValidation'>;
   }
 }
 
@@ -123,8 +125,9 @@ const PanelRoot = styled.div(({ theme }) => ({
 const PanelScroll = styled(ScrollArea)({ height: '100%' });
 const Hint = styled.p({ margin: 0, padding: 16 });
 const Title = styled.span({ display: 'inline-flex', gap: 6, alignItems: 'center' });
-const ProviderLabel = styled.div({ padding: '8px 12px' });
 const ContextMenuList = styled(ActionList)({ minWidth: 240, padding: 0 });
+// Like addon-vitest's list, so that Contract lines up with its rows. The padding is the one of the box around it.
+const WidgetList = styled(ActionList)({ padding: 0 });
 // The status dot of addon-vitest's rows in the same menu (its component is not exported). Gray without a result.
 const StatusDot = styled.span<{ status: ContextMenuRow['value'] }>(({ theme, status }) => ({
   width: 6,
@@ -139,20 +142,65 @@ const StatusDot = styled.span<{ status: ContextMenuRow['value'] }>(({ theme, sta
   }[status],
 }));
 
-// The row of a story, component or group in the context menu of the sidebar, below the reports of addon-vitest and
-// laid out like them: the number of invalid responses and the status dot in the button, a tooltip. Without a story to
-// open (no result) the button is disabled, as Interactions is.
-function MokapiContextMenuRow({ value, label, tooltip, invalid, target, onOpen }: ContextMenuRow & { onOpen: (storyId: string) => void }) {
+// The button of the Contract row, in the context menu and in the Run tests widget, laid out like the status buttons of
+// addon-vitest: the number of invalid responses and the status dot, a tooltip. Without a story to open (no result) the
+// button is disabled, as Interactions is.
+function ContractButton({ value, label, tooltip, invalid, target, onOpen }: ContextMenuRow & { onOpen: (storyId: string) => void }) {
+  return (
+    <ActionList.Button ariaLabel={label} tooltip={tooltip} disabled={target === undefined} onClick={() => { if (target) onOpen(target); }}>
+      {invalid || null}
+      <StatusDot status={value} />
+    </ActionList.Button>
+  );
+}
+
+// The row of a story, component or group in the context menu of the sidebar, below the reports of addon-vitest.
+function MokapiContextMenuRow(row: ContextMenuRow & { onOpen: (storyId: string) => void }) {
   return (
     <ContextMenuList>
       <ActionList.Item>
         <ActionList.Text>Contract</ActionList.Text>
-        <ActionList.Button ariaLabel={label} tooltip={tooltip} disabled={target === undefined} onClick={() => { if (target) onOpen(target); }}>
-          {invalid || null}
-          <StatusDot status={value} />
-        </ActionList.Button>
+        <ContractButton {...row} />
       </ActionList.Item>
     </ContextMenuList>
+  );
+}
+
+// Storybook draws a divider below every test provider box but the last and pads each box. Directly below addon-vitest's
+// rows the Contract row has to read as one more row of their block, so the box before Mokapi's loses its divider and
+// bottom padding, and Mokapi's box its top padding. Storybook's own rules (`:not(:last-child)`) are as specific as
+// these, hence `!important`. Without a box before Mokapi's (Mokapi registered first) nothing matches.
+const TEST_PROVIDER_BOX = `[data-module-id="${TEST_PROVIDER_ID}"]`;
+const BOX_BEFORE_MOKAPI = `[data-module-id]:has(+ ${TEST_PROVIDER_BOX})`;
+const WIDGET_BOX_STYLES = {
+  [BOX_BEFORE_MOKAPI]: { boxShadow: 'none !important', paddingBottom: '0 !important' },
+  [`[data-module-id] + ${TEST_PROVIDER_BOX}`]: { paddingTop: '0 !important' },
+};
+
+// The row "Contract" of the Run tests widget, built like addon-vitest's Interactions row: a disabled checkbox that
+// shows whether a test run checks contracts (it can't be switched here) and the button of the context menu, over all
+// stories of the Storybook. The status store hook updates the row after a run and after "Clear all statuses".
+function ContractWidgetRow({ onOpen }: { onOpen: (storyId: string) => void }) {
+  const statuses = experimental_useStatusStore();
+  const { index } = useStorybookState();
+  // The index is in the order of the sidebar, so the click opens the first story of a status in sidebar order.
+  const storyIds = useMemo(() => Object.values(index ?? {}).filter((entry) => entry.type === 'story').map(({ id }) => id), [index]);
+  const defaultValidation = window.__MOKAPI_PANEL_OPTIONS__?.defaultValidation === true;
+  return (
+    <>
+      <Global styles={WIDGET_BOX_STYLES} />
+      <WidgetList>
+        <ActionList.Item>
+          <ActionList.Action as="label" readOnly tooltip={contractCheckboxTooltip(defaultValidation)}>
+            <ActionList.Icon>
+              <Form.Checkbox name="Contract" checked={defaultValidation} disabled readOnly />
+            </ActionList.Icon>
+            <ActionList.Text>Contract</ActionList.Text>
+          </ActionList.Action>
+          <ContractButton {...widgetRow(storyIds, statuses)} onOpen={onOpen} />
+        </ActionList.Item>
+      </WidgetList>
+    </>
   );
 }
 
@@ -450,6 +498,10 @@ addons.register('mokapi', (api) => {
     api.setSelectedPanel(PANEL_ID);
     api.togglePanel(true);
   };
+  const openStoryInPanel = (storyId: string): void => {
+    api.selectStory(storyId);
+    openPanel();
+  };
   // Selecting the status in the sidebar shows the details.
   statusStore.onSelect(openPanel);
   let remount = nextRemount(initialRemountState, { type: 'initial', validation: api.getGlobals().mokapiValidation }).state;
@@ -485,12 +537,12 @@ addons.register('mokapi', (api) => {
       statusStore.unset();
       clearTestRuns();
     },
-    render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
+    render: () => <ContractWidgetRow onOpen={openStoryInPanel} />,
     // Storybook builds the menu when it opens, so reading the store once is current.
     sidebarContextMenu: ({ context }) => {
       const row = contextMenuRow(context, api.findAllLeafStoryIds(context.id), statusStore.getAll());
       if (!row) return null;
-      return <MokapiContextMenuRow {...row} onOpen={(storyId) => { api.selectStory(storyId); openPanel(); }} />;
+      return <MokapiContextMenuRow {...row} onOpen={openStoryInPanel} />;
     },
   });
   addons.add(PANEL_ID, {

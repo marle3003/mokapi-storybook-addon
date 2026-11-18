@@ -360,6 +360,15 @@ const contractRowOf = async (page, id, name) => {
 const NO_RESULT_TOOLTIP = 'Validate with Mokapi or run tests to see results';
 const PASSED_TOOLTIP = 'All responses match the contract.';
 
+const boxOf = async (locator) => {
+  const box = await locator.boundingBox();
+  assert.ok(box, 'the element has a bounding box');
+  return box;
+};
+const rightOf = async (locator) => { const box = await boxOf(locator); return box.x + box.width; };
+const assertSameEdge = (actual, expected, what) =>
+  assert.ok(Math.abs(actual - expected) <= 1, `${what}: Mokapi ${actual}px, addon-vitest ${expected}px`);
+
 // The Mokapi row has to line up with the Interactions row of addon-vitest: same text x, same button right edge (1px).
 async function assertLaidOutLikeInteractionsRow(page, id) {
   const menu = await openContextMenu(page, id);
@@ -369,14 +378,6 @@ async function assertLaidOutLikeInteractionsRow(page, id) {
 
   const mokapiRow = testProviderRegion.getByRole('listitem').filter({ hasText: 'Contract' });
   const interactionsRow = testProviderRegion.getByRole('listitem').filter({ hasText: 'Interactions' });
-  const boxOf = async (locator) => {
-    const box = await locator.boundingBox();
-    assert.ok(box, 'the element has a bounding box');
-    return box;
-  };
-  const rightOf = async (locator) => { const box = await boxOf(locator); return box.x + box.width; };
-  const assertSameEdge = (actual, expected, what) =>
-    assert.ok(Math.abs(actual - expected) <= 1, `${what}: Mokapi ${actual}px, addon-vitest ${expected}px`);
 
   // The row texts start at the same x.
   assertSameEdge(
@@ -388,6 +389,42 @@ async function assertLaidOutLikeInteractionsRow(page, id) {
     await rightOf(mokapiRow.getByRole('button')),
     await rightOf(interactionsRow.getByRole('button')),
     'right edge of the status button');
+}
+
+// The Run tests widget (Storybook's testing module, dev server only) is a card below the sidebar. Every test provider
+// has a box in it, found by its id: addon-vitest's rows (Interactions, Coverage) and Mokapi's row "Contract".
+const mokapiModule = (page) => page.locator('[data-module-id="mokapi/test-provider"]');
+const vitestModule = (page) => page.locator('[data-module-id="storybook/test/test-provider"]');
+const expandTestingModule = async (page) => {
+  await page.getByRole('button', { name: 'Expand testing module' }).click();
+  await mokapiModule(page).getByText('Contract', { exact: true }).waitFor({ timeout: 3000 });
+};
+const widgetContractButton = (page, name) => mokapiModule(page).getByRole('button', { name, exact: true });
+const boxShadowOf = (locator) => locator.evaluate((element) => getComputedStyle(element).boxShadow);
+
+// The Contract row of the widget has to read as one more row of addon-vitest's block: the text and the button line up
+// with the Coverage row (1px) and the gap to it is the one between Interactions and Coverage (1px). The card grows
+// while it expands, so the measurements are repeated until they are taken on the settled card.
+async function assertContractRowLaidOutLikeCoverageRow(page) {
+  const rowOf = (module, text) => module.getByRole('listitem').filter({ hasText: text });
+  const coverageRow = rowOf(vitestModule(page), 'Coverage');
+  const interactionsRow = rowOf(vitestModule(page), 'Interactions');
+  const contractRow = rowOf(mokapiModule(page), 'Contract');
+  const gapBetween = async (above, below) => (await boxOf(below)).y - ((await boxOf(above)).y + (await boxOf(above)).height);
+  await eventually(async () => {
+    assertSameEdge(
+      (await boxOf(contractRow.getByText('Contract', { exact: true }))).x,
+      (await boxOf(coverageRow.getByText('Coverage', { exact: true }))).x,
+      'left edge of the row text');
+    assertSameEdge(
+      await rightOf(contractRow.getByRole('button')),
+      await rightOf(coverageRow.getByRole('button')),
+      'right edge of the status button');
+    assertSameEdge(
+      await gapBetween(coverageRow, contractRow),
+      await gapBetween(interactionsRow, coverageRow),
+      'gap to the row above');
+  }, 5000);
 }
 const dashboardOperationUrl = (dashboard, path) => `${dashboard}/dashboard/http/services/${path}`;
 
@@ -1042,9 +1079,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await page.getByRole('tab', { name: /^Mokapi/, selected: true }).count(), 0);
 
       // The context menu of a sidebar row lists its statuses; it exists in Storybook's dev server only.
-      await sidebarRow(page, 'profile--error-invalid').hover();
-      await sidebarRow(page, 'profile--error-invalid').getByRole('button', { name: 'Open context menu' }).click();
-      await page.getByRole('button', { name: 'Mokapi: Error (1 invalid response)', exact: true }).click();
+      // Scoped to the menu, because the Contract row of the Run tests widget has a button with the same name.
+      await (await contractRowOf(page, 'profile--error-invalid', 'Mokapi: Error (1 invalid response)')).click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
       await showsText(reportHeadline(page), '1 response does not match the contract.');
     });
@@ -1196,8 +1232,10 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       // Storybook renders no test provider region for a docs entry, its menu only has "Open in editor".
       await sidebarRow(page, 'docs--docs').hover();
       await sidebarRow(page, 'docs--docs').getByRole('button', { name: 'Open context menu' }).click();
-      await page.locator('.sb-list', { hasText: 'Open in editor' }).waitFor();
-      await assertCountStays(page.getByText('Contract', { exact: true }), 0);
+      const menu = page.locator('.sb-list', { hasText: 'Open in editor' });
+      await menu.waitFor();
+      // Scoped to the menu, because the Run tests widget below the sidebar has its own Contract row.
+      await assertCountStays(menu.getByText('Contract', { exact: true }), 0);
     });
 
     await scenario('the Mokapi row of the context menu is laid out like the Interactions row', async (page) => {
@@ -1218,14 +1256,15 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertLaidOutLikeInteractionsRow(page, 'profile--valid');
     });
 
-    await scenario('Clear all statuses removes the Mokapi statuses and the Run tests widget names Mokapi in one line', async (page) => {
+    await scenario('Clear all statuses removes the Mokapi statuses and the Run tests widget has the Contract row instead of a heading', async (page) => {
       await openWithClearedStatuses(page, 'profile--error-invalid');
       // The headline is this render's report: the status is set after it, so Clear can't be overtaken.
       await showsText(reportHeadline(page), '1 response does not match the contract.');
       await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
 
-      await page.getByRole('button', { name: 'Expand testing module' }).click();
-      await showsText(page.locator('[data-module-id="mokapi/test-provider"]'), 'Mokapi contract validation');
+      await expandTestingModule(page);
+      assert.equal(await mokapiModule(page).getByRole('listitem').count(), 1);
+      assert.equal(await mokapiModule(page).getByText('Mokapi contract validation').count(), 0);
 
       await clearAllStatusesButton(page).click();
       await assertNoSidebarStatus(page, 'profile--error-invalid');
@@ -1238,6 +1277,124 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await clearAllStatusesButton(page).click();
       await assertNoSidebarStatus(page, 'profile--valid');
       const button = await contractRowOf(page, 'profile--valid', 'Mokapi: No result');
+      await button.waitFor({ timeout: 3000 });
+      assert.equal(await button.isDisabled(), true);
+    });
+
+    // The Run tests widget below the sidebar. The statuses are the ones of the sidebar, so these scenarios prepare
+    // them like the context menu scenarios do.
+    await scenario('the Run tests widget shows the row Contract and no Mokapi contract validation heading', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'profile--off-invalid' });
+      await expandTestingModule(page);
+      assert.equal(await mokapiModule(page).getByRole('listitem').count(), 1);
+      assert.equal(await mokapiModule(page).getByText('Mokapi contract validation').count(), 0);
+    });
+
+    // The checkbox only shows whether a test run checks contracts, so it is disabled and has no accessible state
+    // of its own: its name comes from the label, the tooltip explains the state.
+    const assertContractCheckbox = async (page, storybookUnderTest, { checked, tooltip }) => {
+      await openStory(page, storybookUnderTest.url, { id: 'profile--off-invalid' });
+      await expandTestingModule(page);
+      const checkbox = mokapiModule(page).getByRole('checkbox', { name: 'Contract' });
+      assert.equal(await checkbox.isDisabled(), true);
+      assert.equal(await checkbox.isChecked(), checked);
+      await mokapiModule(page).getByText('Contract', { exact: true }).hover();
+      await page.getByText(tooltip, { exact: true }).waitFor({ timeout: 3000 });
+    };
+
+    await scenario('the Contract checkbox of the Run tests widget is disabled and empty without defaultValidation', async (page) => {
+      await assertContractCheckbox(page, storybook, {
+        checked: false,
+        tooltip: 'Contract validation is off in test runs. Set defaultValidation: true to check contracts.',
+      });
+    });
+
+    await scenario('the Contract checkbox of the Run tests widget is disabled and checked with defaultValidation', async (page) => {
+      await assertContractCheckbox(page, validatingStorybook, {
+        checked: true,
+        tooltip: 'Contract validation runs with the tests (defaultValidation is on).',
+      });
+    });
+
+    await scenario('the Run tests widget has no divider between addon-vitest rows and Contract', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'profile--off-invalid' });
+      await expandTestingModule(page);
+      // Storybook draws the divider as the box-shadow of every box but the last one, and Mokapi's box is the last.
+      assert.equal(await mokapiModule(page).evaluate((element) => element.nextElementSibling === null), true);
+      assert.equal(await boxShadowOf(vitestModule(page)), 'none');
+    });
+
+    await scenario('the Contract row of the Run tests widget is laid out like the Coverage row', async (page) => {
+      await openWithClearedStatuses(page, 'profile--error-invalid');
+      await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
+      await expandTestingModule(page);
+      await widgetContractButton(page, 'Mokapi: Error (1 invalid response)').waitFor({ timeout: 3000 });
+      await assertContractRowLaidOutLikeCoverageRow(page);
+    });
+
+    await scenario('the Contract row of the Run tests widget is gray and disabled without a Mokapi result', async (page) => {
+      await openWithClearedStatuses(page, 'profile--off-invalid');
+      await expandTestingModule(page);
+      const button = widgetContractButton(page, 'Mokapi: No result');
+      await button.waitFor({ timeout: 3000 });
+      assert.equal(await button.isDisabled(), true);
+      await showsText(button, '');
+      await button.hover();
+      await page.getByText(NO_RESULT_TOOLTIP, { exact: true }).waitFor({ timeout: 3000 });
+    });
+
+    await scenario('the Contract row of the Run tests widget is green with passed stories only and opens the first passed story', async (page) => {
+      await openWithClearedStatuses(page, 'profile--valid');
+      await assertSidebarStatus(page, 'profile--valid', 'Success');
+      // Another story is selected, so the click has to select the passed one. The panel is closed to see it opened.
+      await page.locator('[id="profile--off-invalid"]').click();
+      await eventually(async () => assert.match(page.url(), /path=\/story\/profile--off-invalid/));
+      await page.getByRole('tab', { name: /^Controls/ }).click();
+      assert.equal(await page.getByRole('tab', { name: /^Mokapi/, selected: true }).count(), 0);
+
+      await expandTestingModule(page);
+      const button = widgetContractButton(page, 'Mokapi: Passed');
+      await button.waitFor({ timeout: 3000 });
+      assert.equal(await button.isDisabled(), false);
+      await showsText(button, '');
+      await button.hover();
+      await page.getByText(PASSED_TOOLTIP, { exact: true }).waitFor({ timeout: 3000 });
+      await button.click();
+      await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
+      await eventually(async () => assert.match(page.url(), /path=\/story\/profile--valid/));
+    });
+
+    // Stories with an error and with a warning, the warning story selected, the panel closed.
+    const openWithErrorAndWarning = async (page) => {
+      await openWithClearedStatuses(page, 'profile--error-invalid');
+      await assertSidebarStatus(page, 'profile--error-invalid', 'Error');
+      await page.locator('[id="profile--warning-invalid"]').click();
+      await assertSidebarStatus(page, 'profile--warning-invalid', 'Warning');
+      await page.getByRole('tab', { name: /^Controls/ }).click();
+      assert.equal(await page.getByRole('tab', { name: /^Mokapi/, selected: true }).count(), 0);
+    };
+
+    await scenario('the Contract row of the Run tests widget is red with the summed invalid responses and opens the first error story', async (page) => {
+      await openWithErrorAndWarning(page);
+      await expandTestingModule(page);
+      // One invalid response of the error story and one of the warning story.
+      const button = widgetContractButton(page, 'Mokapi: Error (2 invalid responses)');
+      await button.waitFor({ timeout: 3000 });
+      await showsText(button, '2');
+      await button.hover();
+      await page.getByText('Contract validation failed', { exact: true }).waitFor({ timeout: 3000 });
+      await button.click();
+      await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
+      await eventually(async () => assert.match(page.url(), /path=\/story\/profile--error-invalid/));
+    });
+
+    await scenario('Clear all statuses turns the red Contract row of the Run tests widget gray', async (page) => {
+      await openWithErrorAndWarning(page);
+      await expandTestingModule(page);
+      await widgetContractButton(page, 'Mokapi: Error (2 invalid responses)').waitFor({ timeout: 3000 });
+
+      await clearAllStatusesButton(page).click();
+      const button = widgetContractButton(page, 'Mokapi: No result');
       await button.waitFor({ timeout: 3000 });
       assert.equal(await button.isDisabled(), true);
     });

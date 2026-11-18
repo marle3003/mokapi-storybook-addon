@@ -12,6 +12,7 @@ import { MokapiContractError, testHook, validationHook } from '../dist/listener.
 import {
   BODY_LIMIT,
   contextMenuRow,
+  contractCheckboxTooltip,
   countLine,
   errorMessage,
   formatBody,
@@ -31,6 +32,7 @@ import {
   statusText,
   testModeText,
   truncateBody,
+  widgetRow,
 } from '../dist/report.js';
 import { classify, sendValidation, serializePair, unreadableMessage } from '../dist/validation.js';
 
@@ -898,6 +900,52 @@ test('context menu row of a component ignores stories without a status', () => {
   assert.equal(row.label, 'Mokapi: Warning (1 invalid response)');
 });
 
+test('widget row is gray without a result for no stories and for an empty status map', () => {
+  assert.deepEqual(widgetRow([], {}), NO_RESULT_ROW);
+  assert.deepEqual(widgetRow(['a--one', 'b--two'], {}), NO_RESULT_ROW);
+  assert.equal('target' in widgetRow(['a--one'], {}), false);
+});
+
+test('widget row shows the worst status over all stories and sums their invalid responses', () => {
+  const ids = ['a--one', 'b--two', 'c--three'];
+  const rowFor = (...statuses) => widgetRow(ids, statusesOf(...statuses));
+  assert.equal(rowFor(mokapiStatus('status-value:success', 0, 'a--one'), mokapiStatus('status-value:warning', 1, 'b--two')).value, 'status-value:warning');
+  const error = rowFor(mokapiStatus('status-value:error', 1, 'a--one'), mokapiStatus('status-value:warning', 2, 'b--two'), mokapiStatus('status-value:success', 5, 'c--three'));
+  assert.equal(error.value, 'status-value:error');
+  assert.equal(error.invalid, 3);
+  assert.equal(error.label, 'Mokapi: Error (3 invalid responses)');
+});
+
+test('widget row has fixed tooltips, also for a single failing story', () => {
+  const tooltipOf = (value) => widgetRow(['a--one'], statusesOf(mokapiStatus(value, 1))).tooltip;
+  assert.equal(tooltipOf('status-value:error'), 'Contract validation failed');
+  assert.equal(tooltipOf('status-value:warning'), 'Contract validation has warnings');
+  assert.equal(tooltipOf('status-value:success'), PASSED_TEXT);
+  assert.equal(widgetRow([], {}).tooltip, 'Validate with Mokapi or run tests to see results');
+});
+
+test('widget row opens the first story of the winning status in the given order', () => {
+  const ids = ['a--three', 'a--one', 'a--two', 'a--four'];
+  const targetOf = (...statuses) => widgetRow(ids, statusesOf(...statuses)).target;
+  // the status map is filled in another order than the story ids
+  assert.equal(targetOf(mokapiStatus('status-value:error', 1, 'a--four'), mokapiStatus('status-value:error', 1, 'a--two'), mokapiStatus('status-value:warning', 1, 'a--three')), 'a--two');
+  assert.equal(targetOf(mokapiStatus('status-value:success', 0, 'a--four'), mokapiStatus('status-value:warning', 1, 'a--two'), mokapiStatus('status-value:warning', 1, 'a--one')), 'a--one');
+  assert.equal(targetOf(mokapiStatus('status-value:success', 0, 'a--two'), mokapiStatus('status-value:success', 0, 'a--three')), 'a--three');
+});
+
+test('widget row ignores stories without a status and statuses of other types', () => {
+  const other = { ...mokapiStatus('status-value:error', 4, 'a--one'), typeId: 'storybook/component-test' };
+  const row = widgetRow(['a--none', 'a--one', 'a--two'], statusesOf(other, mokapiStatus('status-value:warning', 1, 'a--two')));
+  assert.equal(row.target, 'a--two');
+  assert.equal(row.label, 'Mokapi: Warning (1 invalid response)');
+  assert.equal(row.invalid, 1);
+});
+
+test('contract checkbox tooltip says whether test runs check contracts', () => {
+  assert.equal(contractCheckboxTooltip(true), 'Contract validation runs with the tests (defaultValidation is on).');
+  assert.equal(contractCheckboxTooltip(false), 'Contract validation is off in test runs. Set defaultValidation: true to check contracts.');
+});
+
 test('a Mokapi that cannot be reached is reported as entry and as notice of the same render', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('Failed to fetch'); });
   const panel = recorder();
@@ -1733,10 +1781,12 @@ test('preset defines the resolved options for the preview and sets up no proxy',
   assert.deepEqual(JSON.parse(viteFinal({}).define.__MOKAPI_STORYBOOK_OPTIONS__), resolveOptions());
 });
 
-test('preset injects only the dashboard URL into the manager and escapes markup', () => {
+test('preset injects only the dashboard URL and defaultValidation into the manager and escapes markup', () => {
   const head = managerHead('<title>x</title>', { dashboardUrl: 'http://localhost:9090/' });
   assert.ok(head.startsWith('<title>x</title>\n<script>'));
-  assert.ok(head.includes('globalThis.__MOKAPI_PANEL_OPTIONS__ = {"dashboardUrl":"http://localhost:9090"};'));
+  assert.ok(head.includes('globalThis.__MOKAPI_PANEL_OPTIONS__ = {"dashboardUrl":"http://localhost:9090","defaultValidation":false};'));
+  assert.ok(managerHead('', { defaultValidation: true }).includes('{"dashboardUrl":"http://localhost:8080","defaultValidation":true};'));
+  assert.throws(() => managerHead('', { defaultValidation: 'yes' }), /Mokapi: defaultValidation/);
   assert.equal(managerHead().includes('http://localhost:8080'), true);
   const escaped = managerHead('', { dashboardUrl: 'http://localhost:8080/?</script><script>alert(1)' });
   assert.equal(escaped.match(/<\/script>/g).length, 1);
