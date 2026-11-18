@@ -233,8 +233,9 @@ has:
   test mode of the story. See the table below.
 - A headline in bold, only for `WARN`, `FAIL` and `SKIP`. For `WARN` and `FAIL` it
   is the headline of the [error message](#error-message), for example
-  `1 response does not match the contract.` For `SKIP` it is always
-  `No response was checked against the contract.`
+  `1 response does not match the contract.` For `SKIP` it is
+  `No response was checked against the contract.`, or the message about the
+  missing MSW worker if `context.msw` is not set.
 - The counts in one line, for example
   `2 responses validated, 1 valid, 1 invalid`. The line counts all entries since
   the story was mounted and updates as results come in. Kinds that don't occur

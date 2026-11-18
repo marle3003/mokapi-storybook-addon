@@ -890,10 +890,12 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     // Not in the contract, no request and no worker: nothing was checked, and Storybook still reports the story as passed.
     await scenario('the badge shows SKIP with its headline when no response was checked against the contract', async (page) => {
-      for (const [id, mode] of [['profile--not-in-contract', 'warning'], ['profile--error-no-request', 'error'], ['profile--error-no-worker', 'error']]) {
+      const noResponse = 'No response was checked against the contract.';
+      const noWorker = 'MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.';
+      for (const [id, mode, headline] of [['profile--not-in-contract', 'warning', noResponse], ['profile--error-no-request', 'error', noResponse], ['profile--error-no-worker', 'error', noWorker]]) {
         await openValidated(page, id);
         await showsText(reportBadge(page), 'SKIP');
-        await showsText(reportHeadline(page), 'No response was checked against the contract.');
+        await showsText(reportHeadline(page), headline);
         await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS[mode]);
         await assertStoryStaysGreen(page);
         await assertNoSidebarStatus(page, id);

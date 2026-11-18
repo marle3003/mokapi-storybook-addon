@@ -696,18 +696,26 @@ test('time is formatted as HH:mm:ss in local time, whatever the locale', () => {
 
 test('report headline is the headline of the report for a warning and a failed report only', () => {
   const invalidHeadline = '1 response does not match the contract.';
-  assert.equal(reportHeadline({ status: 'failed', headline: invalidHeadline }, [invalidEntry()]), invalidHeadline);
-  assert.equal(reportHeadline({ status: 'warning', headline: invalidHeadline }, [invalidEntry()]), invalidHeadline);
-  assert.equal(reportHeadline({ status: 'warning', headline: 'not reachable' }, []), 'not reachable');
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, [validEntry()]), undefined);
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, [validEntry(), notInContractEntry()]), undefined);
-  assert.equal(reportHeadline(undefined, []), undefined);
+  assert.equal(reportHeadline({ status: 'failed', headline: invalidHeadline }, stateOf([invalidEntry()])), invalidHeadline);
+  assert.equal(reportHeadline({ status: 'warning', headline: invalidHeadline }, stateOf([invalidEntry()])), invalidHeadline);
+  assert.equal(reportHeadline({ status: 'warning', headline: 'not reachable' }, stateOf([])), 'not reachable');
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([validEntry()])), undefined);
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([validEntry(), notInContractEntry()])), undefined);
+  assert.equal(reportHeadline(undefined, stateOf([])), undefined);
 });
 
 test('report headline says that no response was checked for a passed report without a valid response', () => {
   assert.equal(SKIP_HEADLINE, 'No response was checked against the contract.');
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, []), SKIP_HEADLINE);
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, [notInContractEntry()]), SKIP_HEADLINE);
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([])), SKIP_HEADLINE);
+  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([notInContractEntry()])), SKIP_HEADLINE);
+});
+
+test('report headline names the missing MSW worker for a skipped report', () => {
+  const message = 'MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.';
+  const skipped = { status: 'passed', headline: '', invalid: 0 };
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('worker-missing', message)])), message);
+  assert.equal(reportHeadline(skipped, stateOf([notInContractEntry()], [panelNotice('worker-missing', message)])), message);
+  assert.equal(reportHeadline(skipped, stateOf([validEntry()], [panelNotice('worker-missing', message)])), undefined);
 });
 
 test('a body is cut after 10,000 characters and flagged only when something was cut', () => {

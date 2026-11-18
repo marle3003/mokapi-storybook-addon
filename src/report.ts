@@ -102,10 +102,11 @@ const isSkipped = (report: Report, entries: Entry[]): boolean =>
 
 export const SKIP_HEADLINE = 'No response was checked against the contract.';
 
-// A report that passed with a valid response has nothing to say beyond its badge.
-export function reportHeadline(report: Report | undefined, entries: Entry[]): string | undefined {
+// A report that passed with a valid response has nothing to say beyond its badge. A skip names a missing worker,
+// which is no failure, so the generic text would hide the cause.
+export function reportHeadline(report: Report | undefined, { entries, notices }: Results): string | undefined {
   if (report === undefined) return undefined;
-  if (isSkipped(report, entries)) return SKIP_HEADLINE;
+  if (isSkipped(report, entries)) return notices.find(({ kind }) => kind === 'worker-missing')?.message ?? SKIP_HEADLINE;
   return report.status === 'passed' ? undefined : report.headline;
 }
 
