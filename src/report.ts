@@ -213,10 +213,13 @@ const SIDEBAR_VALUES: Record<ReportStatus, Status['value']> = {
   failed: 'status-value:error',
 };
 
+// The report and the status store are untyped at runtime, so only a positive integer counts as a count.
+const isPositiveCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) > 0;
+
 // A passed report with a valid response is a success, so the sidebar shows that Mokapi checked the story. A skipped
-// report (passed without a valid response) and a story without a report have no status: nothing was checked.
+// report (passed without a valid count) and a story without a report have no status: nothing was checked.
 export function sidebarStatus(storyId: string, report: Report | undefined): Status | undefined {
-  if (report === undefined || (report.status === 'passed' && report.valid === 0)) return undefined;
+  if (report === undefined || (report.status === 'passed' && !isPositiveCount(report.valid))) return undefined;
   return {
     typeId: STATUS_TYPE_ID,
     storyId,
@@ -260,7 +263,7 @@ const CONTEXT_MENU_TEXTS: Record<RowValue, { label: string; tooltip: string }> =
 // `data` is untyped and the store is shared, so anything but a count of invalid responses is no count.
 function invalidCountOf({ data }: Status): number {
   const invalid = data?.invalid;
-  return Number.isInteger(invalid) && invalid > 0 ? invalid : 0;
+  return isPositiveCount(invalid) ? invalid : 0;
 }
 
 const invalidLabel = (label: string, invalid: number): string =>

@@ -762,6 +762,14 @@ test('sidebar status is none for a skipped report, a passed report without a val
   assert.equal(sidebarStatus('a--one', undefined), undefined);
 });
 
+test('the sidebar status of a passed report without a valid count is none', () => {
+  const report = { status: 'passed', headline: '', invalid: 0 };
+  assert.equal(sidebarStatus('a--one', report), undefined, 'missing');
+  for (const valid of ['1', NaN, -1, 1.5, null]) {
+    assert.equal(sidebarStatus('a--one', { ...report, valid }), undefined, String(valid));
+  }
+});
+
 test('sidebar status of a failed or warning report is not a success, whatever the valid responses', () => {
   const headline = '1 response does not match the contract.';
   assert.equal(sidebarStatus('a--one', { status: 'failed', headline, invalid: 1, valid: 3 }).value, 'status-value:error');
