@@ -424,18 +424,52 @@ Storybook's status store:
 |--------|----------------|
 | `failed` (mode `'error'`) | error |
 | `warning` (mode `'warning'`) | warning |
-| `passed`, mode `'off'`, validation off, `disable: true` | none |
+| `passed` with at least one valid response | success |
+| skipped (`passed`, but no response was checked), mode `'off'`, validation off, `disable: true` | none |
 
-The status has the title `Mokapi`. Its description is the headline of the
-[error message](#error-message), for example
-`1 response does not match the contract.`. Open the context menu of the
-story in the sidebar and select the **Contract** row to open the **Mokapi** panel.
-The row shows the number of invalid responses and a status dot.
+The status has the title `Mokapi`. For an error or a warning, its description is
+the headline of the [error message](#error-message), for example
+`1 response does not match the contract.`. For a pass it is
+`All responses match the contract.`. A story with a success status gets
+Storybook's green icon in the sidebar and shows up in the filter
+**Stories with passing tests**. A skipped story, one that passed without a single
+response checked against the contract, gets no status, like the gray `SKIP` badge
+in the panel.
 
-A new result of the story replaces its status, and a passed check removes it.
+A new result of the story replaces its status, and a skipped check removes it.
 Switching to another story keeps the status. **Clear all statuses** in the
-testing module removes all Mokapi statuses. Without a new report, a status stays
-when you switch validation off.
+testing module removes all Mokapi statuses, the success statuses included.
+Without a new report, a status stays when you switch validation off.
+
+#### Context menu
+
+Open the context menu of a story, a component or a group in the sidebar. The row
+**Contract** sits next to the reports of other test providers such as
+Interactions and Accessibility. It is always there, so you see at a glance
+whether Mokapi checked the story. A docs entry has no row.
+
+| State | Dot | Number | Button |
+|-------|-----|--------|--------|
+| No result | gray | none | disabled, `Mokapi: No result` |
+| Passed | green | none | `Mokapi: Passed` |
+| Warning | yellow | invalid responses | `Mokapi: Warning (1 invalid response)` |
+| Error | red | invalid responses | `Mokapi: Error (2 invalid responses)` |
+
+The row says "No result" for a story without a Mokapi status. This covers a
+skipped story, mode `'off'`, validation off and `disable: true`. The tooltip of a
+story is `Validate with Mokapi or run tests to see results`,
+`All responses match the contract.` or the headline of the error or warning.
+
+A component or a group shows the worst status of the stories below it, in the
+order error, warning, passed, no result. The number is the sum of their invalid
+responses. Its tooltip is `Contract validation failed`,
+`Contract validation has warnings`, `All responses match the contract.` or, without
+a result, the same text as for a story.
+
+A click on the button selects a story and opens the **Mokapi** panel. For a
+component or a group that is the first story with an error, otherwise the first
+with a warning, otherwise the first that passed. Without a result the button is
+disabled.
 
 **Run tests** sets Mokapi statuses as well, see [Vitest](#vitest). A test run
 replaces the status of every story that took part in it. Stories outside the run
@@ -574,17 +608,20 @@ the Mokapi statuses in the sidebar:
 - A story in `'warning'` mode with a failing result gets a yellow status.
 - A story in `'error'` mode with a failing result gets a red status. The story
   is also listed as failed in addon-vitest's own **Component tests** status.
-- A story that took part in the run without a failing result loses its Mokapi
-  status. This includes stories with validation off, `disable: true` and mode
+- A story that passed with at least one valid response gets the green success
+  status.
+- A story that took part in the run without one of these results loses its Mokapi
+  status. This includes skipped stories (passed without a valid response),
+  stories without a Mokapi report, validation off, `disable: true` and mode
   `'off'`. Skipped stories count as part of the run.
 - Stories that didn't take part in the run keep their status.
 
-The description of the status is the headline, and selecting it opens the
-**Mokapi** panel.
+The description of the status is the headline (`All responses match the contract.`
+for a pass). The **Contract** row in the context menu opens the **Mokapi** panel.
 
 The panel shows the result of the story as it does after a validation in the
 preview: badge, headline, counts, notices and entries with their Request /
-Response details. A line above the notices says `Result of the last test run.`
+Response details. This includes a passed run with its valid entries. A line above the notices says `Result of the last test run.`
 The hint to turn validation on and the line
 `No responses validated since this story was mounted.` don't appear for it. This
 works with validation off in the Storybook UI too, so with the setup above
@@ -736,7 +773,7 @@ validation off, a story without a worker runs without any message.
   addon-vitest keeps the reports of failed stories out of its results. The panel
   shows the badge and the headline only.
 - Results of test runs are gone after a browser reload.
-- Selecting a Mokapi status in the sidebar works only with `storybook dev`,
+- The **Contract** row in the sidebar context menu works only with `storybook dev`,
   because Storybook shows the context menu of a story in dev only. The statuses of
   a static build live in the browser and are gone after a reload. With
   `storybook dev` they survive a reload and stay until the dev server stops.

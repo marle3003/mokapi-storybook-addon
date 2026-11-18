@@ -205,15 +205,24 @@ export function formatBody(text: string): string {
 
 export const STATUS_TYPE_ID = 'mokapi/validation';
 
-// A passed check has no status, so that a story only shows an icon when there is something to look at.
+export const PASSED_TEXT = 'All responses match the contract.';
+
+const SIDEBAR_VALUES: Record<ReportStatus, Status['value']> = {
+  passed: 'status-value:success',
+  warning: 'status-value:warning',
+  failed: 'status-value:error',
+};
+
+// A passed report with a valid response is a success, so the sidebar shows that Mokapi checked the story. A skipped
+// report (passed without a valid response) and a story without a report have no status: nothing was checked.
 export function sidebarStatus(storyId: string, report: Report | undefined): Status | undefined {
-  if (report === undefined || report.status === 'passed') return undefined;
+  if (report === undefined || (report.status === 'passed' && report.valid === 0)) return undefined;
   return {
     typeId: STATUS_TYPE_ID,
     storyId,
     title: 'Mokapi',
-    value: report.status === 'failed' ? 'status-value:error' : 'status-value:warning',
-    description: report.headline,
+    value: SIDEBAR_VALUES[report.status],
+    description: report.status === 'passed' ? PASSED_TEXT : report.headline,
     // The context menu reads the number from the status store, which outlives the panel state of a browser reload.
     data: { invalid: report.invalid },
     // Storybook lists a status in the top group of the context menu unless the status opts out. Like addon-vitest,
@@ -222,11 +231,31 @@ export function sidebarStatus(storyId: string, report: Report | undefined): Stat
   };
 }
 
-// Only these Mokapi statuses get a row; a missing value means no section. A `Map`, so `constructor` doesn't find a property of `Object`.
-const CONTEXT_MENU_LABELS = new Map<Status['value'], string>([
-  ['status-value:error', 'Mokapi: Error'],
-  ['status-value:warning', 'Mokapi: Warning'],
-]);
+export interface ContextMenuRow {
+  value: 'status-value:unknown' | 'status-value:success' | 'status-value:warning' | 'status-value:error';
+  /** The accessible name of the row's button. */
+  label: string;
+  tooltip: string;
+  /** The number of invalid responses behind an error or warning; 0 shows no number. */
+  invalid: number;
+  /** The story the button opens; without one the button is disabled. */
+  target?: string;
+}
+
+type RowValue = ContextMenuRow['value'];
+
+// Worst first. Other values (pending, unknown, made up by another version) are no result.
+const RESULT_VALUES: RowValue[] = ['status-value:error', 'status-value:warning', 'status-value:success'];
+
+const isFailing = (value: Status['value']): boolean => value === 'status-value:error' || value === 'status-value:warning';
+
+// The tooltip is the text of a component, a group or a story whose status has no headline.
+const CONTEXT_MENU_TEXTS: Record<RowValue, { label: string; tooltip: string }> = {
+  'status-value:error': { label: 'Mokapi: Error', tooltip: 'Contract validation failed' },
+  'status-value:warning': { label: 'Mokapi: Warning', tooltip: 'Contract validation has warnings' },
+  'status-value:success': { label: 'Mokapi: Passed', tooltip: PASSED_TEXT },
+  'status-value:unknown': { label: 'Mokapi: No result', tooltip: 'Validate with Mokapi or run tests to see results' },
+};
 
 // `data` is untyped and the store is shared, so anything but a count of invalid responses is no count.
 function invalidCountOf({ data }: Status): number {
@@ -234,15 +263,32 @@ function invalidCountOf({ data }: Status): number {
   return Number.isInteger(invalid) && invalid > 0 ? invalid : 0;
 }
 
-// The row of the Mokapi section in the sidebar's context menu. Only a story has one, and only with a status to show.
-// Like addon-vitest's Interactions button, the label names the number of invalid responses, when there are any.
+const invalidLabel = (label: string, invalid: number): string =>
+  invalid > 0 ? `${label} (${invalid} invalid ${invalid === 1 ? 'response' : 'responses'})` : label;
+
+// The row "Contract" in the sidebar's context menu, like addon-vitest's Interactions row: every story, component and
+// group has one, a docs entry has none. A component or group shows the worst Mokapi status of its leaf stories and
+// the sum of their invalid responses, and its button opens the first story of that status.
 export function contextMenuRow(
   entry: { type: string; id: string },
+  leafStoryIds: readonly string[],
   statuses: StatusesByStoryIdAndTypeId,
-): { status: Status; label: string; invalid: number } | undefined {
-  const status = entry.type === 'story' ? statuses[entry.id]?.[STATUS_TYPE_ID] : undefined;
-  const label = status && CONTEXT_MENU_LABELS.get(status.value);
-  if (!status || !label) return undefined;
-  const invalid = invalidCountOf(status);
-  return { status, label: invalid > 0 ? `${label} (${invalid} invalid ${invalid === 1 ? 'response' : 'responses'})` : label, invalid };
+): ContextMenuRow | undefined {
+  if (entry.type === 'docs') return undefined;
+  const leaves = leafStoryIds.flatMap((storyId) => {
+    const status = statuses[storyId]?.[STATUS_TYPE_ID];
+    return status ? [{ storyId, status }] : [];
+  });
+  const value = RESULT_VALUES.find((candidate) => leaves.some(({ status }) => status.value === candidate));
+  if (value === undefined) return { value: 'status-value:unknown', ...CONTEXT_MENU_TEXTS['status-value:unknown'], invalid: 0 };
+  const [{ storyId, status }] = leaves.filter((leaf) => leaf.status.value === value);
+  const invalid = leaves.filter((leaf) => isFailing(leaf.status.value)).reduce((sum, leaf) => sum + invalidCountOf(leaf.status), 0);
+  const { label, tooltip } = CONTEXT_MENU_TEXTS[value];
+  return {
+    value,
+    label: invalidLabel(label, invalid),
+    tooltip: (entry.type === 'story' && isFailing(value) && status.description) || tooltip,
+    invalid,
+    target: storyId,
+  };
 }

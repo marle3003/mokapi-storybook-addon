@@ -1,6 +1,6 @@
 import { isTestMode } from './options.js';
 import { CONTRACT_ERROR_PREFIX, headline } from './report.js';
-import { invalidCount, resultsOfStory, type Entry, type Notice, type PanelState, type Report } from './results.js';
+import { invalidCount, resultsOfStory, validCount, type Entry, type Notice, type PanelState, type Report } from './results.js';
 import type { TestMode } from './types.js';
 
 // What the addon reads of the `CurrentRun` that @storybook/addon-vitest publishes when a run is over. It is
@@ -42,11 +42,14 @@ type RunReport = NonNullable<TestRunPayload['reports'][string]>[number];
 const isResult = (result: unknown): result is { entries: Entry[]; notices: Notice[]; testMode?: unknown } =>
   typeof result === 'object' && result !== null && 'entries' in result && Array.isArray(result.entries) && 'notices' in result && Array.isArray(result.notices);
 
+// A passed report is a result only with a valid response: without one the story was skipped and has nothing to show.
 function runOfReport(reports: RunReport[] = []): StoryRun | undefined {
   const report = reports.find(({ type, version }) => type === 'mokapi' && version === 1);
-  if (report === undefined || (report.status !== 'warning' && report.status !== 'failed') || !isResult(report.result)) return undefined;
+  if (report === undefined || (report.status !== 'passed' && report.status !== 'warning' && report.status !== 'failed') || !isResult(report.result)) return undefined;
   const { entries, notices, testMode } = report.result;
-  return { report: { status: report.status, headline: headline(report.result), invalid: invalidCount(report.result) }, entries, notices, ...(isTestMode(testMode) && { testMode }) };
+  const valid = validCount(report.result);
+  if (report.status === 'passed' && valid === 0) return undefined;
+  return { report: { status: report.status, headline: headline(report.result), invalid: invalidCount(report.result), valid }, entries, notices, ...(isTestMode(testMode) && { testMode }) };
 }
 
 // A contract error fails the story only in test mode `error`.
@@ -54,7 +57,7 @@ function runOfError(description = ''): StoryRun | undefined {
   const start = description.indexOf(CONTRACT_ERROR_PREFIX);
   if (start < 0) return undefined;
   const failed = description.slice(start + CONTRACT_ERROR_PREFIX.length).split('\n')[0];
-  return { report: { status: 'failed', headline: failed, invalid: 0 }, entries: [], notices: [], testMode: 'error' };
+  return { report: { status: 'failed', headline: failed, invalid: 0, valid: 0 }, entries: [], notices: [], testMode: 'error' };
 }
 
 // A story took part in the run when it has a component test status: stories without a Mokapi report (validation
@@ -62,7 +65,7 @@ function runOfError(description = ''): StoryRun | undefined {
 export const ranStoryIds = ({ componentTestStatuses }: TestRunPayload): string[] =>
   componentTestStatuses.map(({ storyId }) => storyId);
 
-// A passed story has no result: there is nothing to show for it.
+// A skipped story (passed without a valid response) has no result: there is nothing to show for it.
 export const testRunResults = (payload: TestRunPayload): StoryRuns => Object.fromEntries(
   payload.componentTestStatuses.flatMap(({ storyId, description }) => {
     const run = runOfReport(payload.reports[storyId]) ?? runOfError(description);

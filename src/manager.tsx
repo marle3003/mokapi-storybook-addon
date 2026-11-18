@@ -6,12 +6,12 @@ import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDE
 import { ActionList, Badge, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
 import { CheckIcon, CircleHollowIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
 import { styled, useTheme } from 'storybook/theming';
-import type { Status } from 'storybook/internal/types';
 import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
 import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
 import {
   BODY_LIMIT,
   contextMenuRow,
+  type ContextMenuRow,
   countLine,
   formatBody,
   formatTime,
@@ -125,25 +125,31 @@ const Hint = styled.p({ margin: 0, padding: 16 });
 const Title = styled.span({ display: 'inline-flex', gap: 6, alignItems: 'center' });
 const ProviderLabel = styled.div({ padding: '8px 12px' });
 const ContextMenuList = styled(ActionList)({ minWidth: 240, padding: 0 });
-// The status dot of addon-vitest's rows in the same menu (its component is not exported).
-const StatusDot = styled.span<{ status: Status['value'] }>(({ theme, status }) => ({
+// The status dot of addon-vitest's rows in the same menu (its component is not exported). Gray without a result.
+const StatusDot = styled.span<{ status: ContextMenuRow['value'] }>(({ theme, status }) => ({
   width: 6,
   height: 6,
   margin: 4,
   borderRadius: '50%',
-  background: status === 'status-value:error' ? theme.color.negative : theme.color.gold,
+  background: {
+    'status-value:error': theme.color.negative,
+    'status-value:warning': theme.color.gold,
+    'status-value:success': theme.color.positive,
+    'status-value:unknown': theme.textMutedColor,
+  }[status],
 }));
 
-// The row of a story with a Mokapi status in the context menu of the sidebar, below the reports of addon-vitest and
-// laid out like them: the number of invalid responses and the status dot in the button, the headline as tooltip.
-function MokapiContextMenuRow({ status, label, invalid, onOpen }: { status: Status; label: string; invalid: number; onOpen: () => void }) {
+// The row of a story, component or group in the context menu of the sidebar, below the reports of addon-vitest and
+// laid out like them: the number of invalid responses and the status dot in the button, a tooltip. Without a story to
+// open (no result) the button is disabled, as Interactions is.
+function MokapiContextMenuRow({ value, label, tooltip, invalid, target, onOpen }: ContextMenuRow & { onOpen: (storyId: string) => void }) {
   return (
     <ContextMenuList>
       <ActionList.Item>
         <ActionList.Text>Contract</ActionList.Text>
-        <ActionList.Button ariaLabel={label} tooltip={status.description} onClick={onOpen}>
+        <ActionList.Button ariaLabel={label} tooltip={tooltip} disabled={target === undefined} onClick={() => { if (target) onOpen(target); }}>
           {invalid || null}
-          <StatusDot status={status.value} />
+          <StatusDot status={value} />
         </ActionList.Button>
       </ActionList.Item>
     </ContextMenuList>
@@ -414,7 +420,7 @@ function Panel() {
 
 addons.register('mokapi', (api) => {
   const statusStore = experimental_getStatusStore(STATUS_TYPE_ID);
-  // A story has a Mokapi status while its latest result is a warning or a failure.
+  // A story has a Mokapi status while its latest result checked a response: a pass, a warning or a failure.
   const updateStatuses = (results: [storyId: string, report: Report | undefined][]): void => {
     const statuses = results.map(([storyId, report]) => ({ storyId, status: sidebarStatus(storyId, report) }));
     statusStore.set(statuses.flatMap(({ status }) => status ?? []));
@@ -482,9 +488,9 @@ addons.register('mokapi', (api) => {
     render: () => <ProviderLabel>Mokapi contract validation</ProviderLabel>,
     // Storybook builds the menu when it opens, so reading the store once is current.
     sidebarContextMenu: ({ context }) => {
-      const row = contextMenuRow(context, statusStore.getAll());
+      const row = contextMenuRow(context, api.findAllLeafStoryIds(context.id), statusStore.getAll());
       if (!row) return null;
-      return <MokapiContextMenuRow {...row} onOpen={() => { api.selectStory(context.id); openPanel(); }} />;
+      return <MokapiContextMenuRow {...row} onOpen={(storyId) => { api.selectStory(storyId); openPanel(); }} />;
     },
   });
   addons.add(PANEL_ID, {

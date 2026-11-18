@@ -11,7 +11,7 @@ import {
   truncateBody,
   VALIDATION_TIMEOUT_MS,
 } from './report.js';
-import { initialPanelState, invalidCount, reducePanel, type Entry, type MessageDetails, type PanelAction, type PanelState } from './results.js';
+import { initialPanelState, invalidCount, reducePanel, validCount, type Entry, type MessageDetails, type PanelAction, type PanelState } from './results.js';
 import type { MokapiStoryParameters, TestMode } from './types.js';
 import { classify, sendValidation, serializePair, unreadableMessage, type ValidationOutcome, type ValidationPayload } from './validation.js';
 
@@ -308,6 +308,6 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
   const status = reportStatus(render.state, render.mode);
   const { entries, notices } = render.state;
   context.reporting.addReport({ type: 'mokapi', version: 1, status, result: { entries, notices, testMode: render.mode } });
-  announce(render, options.emit, { type: 'report', renderId: render.renderId, storyId: context.id, status, headline: headline(render.state), invalid: invalidCount(render.state) });
+  announce(render, options.emit, { type: 'report', renderId: render.renderId, storyId: context.id, status, headline: headline(render.state), invalid: invalidCount(render.state), valid: validCount(render.state) });
   if (status === 'failed' && isVitestBrowserRun()) throw new MokapiContractError(errorMessage(render.state));
 }
