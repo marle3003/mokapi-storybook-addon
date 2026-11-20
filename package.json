@@ -11,9 +11,10 @@
     "url": "https://github.com/marle3003/mokapi-storybook-addon/issues"
   },
   "keywords": [
+    "storybook-addon",
+    "test",
     "mokapi",
     "storybook",
-    "storybook-addon",
     "msw",
     "mock service worker",
     "api mocking",
@@ -71,5 +72,9 @@
     "vite": ">=6",
     "react": ">=18"
   },
-  "storybook": { "displayName": "Mokapi" }
+  "storybook": {
+    "displayName": "Mokapi",
+    "unsupportedFrameworks": ["react-native", "angular", "ember"],
+    "icon": "https://mokapi.io/icon-180.png"
+  }
 }
