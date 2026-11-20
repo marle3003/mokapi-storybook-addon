@@ -52,7 +52,6 @@ with `passthrough()`, that no handler matches or that you answer with
 - [Mokapi](https://mokapi.io/docs/get-started/installation) 0.58.0 or newer
 - Storybook 10.6.7 or newer with the Vite builder and CSF3 stories
 - MSW 2.15.0 or newer
-- React 18 or newer (used for the addon panel only)
 - Node.js 22.12.0 or newer
 
 ## Quick start

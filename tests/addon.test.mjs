@@ -1811,10 +1811,15 @@ test('core can be imported without MSW, which the package neither bundles nor re
   assert.equal(packageJson.peerDependencies.msw, undefined);
   assert.equal(packageJson.peerDependenciesMeta, undefined);
   assert.equal(packageJson.dependencies, undefined);
-  assert.deepEqual(Object.keys(packageJson.exports), ['.', './preset']);
+  assert.deepEqual(Object.keys(packageJson.exports), ['.', './preset', './package.json']);
   const sources = await Promise.all(['listener', 'validation', 'results', 'preview', 'options', 'preset']
     .map((name) => readFile(new URL(`../dist/${name}.js`, import.meta.url), 'utf8')));
   assert.deepEqual(sources.filter((source) => /from ['"]msw/.test(source)), []);
+});
+
+test('React is no peer dependency, because the manager bundle gets it from Storybook', async () => {
+  const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(packageJson.peerDependencies.react, undefined);
 });
 
 test('manager bundle imports only modules that the Storybook manager provides as globals', async () => {
