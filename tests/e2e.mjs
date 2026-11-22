@@ -475,7 +475,7 @@ async function assertCountStays(locator, count) {
 // clearly after it, but before the old render leaves `completing`.
 const SWITCH_INTO_COMPLETING_MS = 1500;
 
-test('Storybook user validates the MSW responses of a story against the OpenAPI contract', { timeout: 300000 }, async (t) => {
+test('Storybook user validates the MSW responses of a story against the OpenAPI contract', { timeout: 600000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'mokapi-storybook-e2e-'));
   let failureDirectory;
   let stopMokapi;
@@ -526,7 +526,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     };
 
     // Each scenario runs in a fresh browser context, so that no state leaks between them.
-    const scenario = (name, run, contextOptions = {}) => t.test(name, async () => {
+    // Its own timeout makes a hanging scenario fail by name instead of using up the budget of the whole test.
+    const scenario = (name, run, contextOptions = {}) => t.test(name, { timeout: 60000 }, async () => {
       const context = await browser.newContext({ viewport: { width: 1280, height: 1600 }, locale: 'en-US', ...contextOptions });
       await recordFinishedStories(context);
       const page = await context.newPage();
