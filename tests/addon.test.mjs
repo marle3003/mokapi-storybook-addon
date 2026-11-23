@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { resolveOptions } from '../dist/index.js';
-import { initialPanelState, invalidCount, reducePanel, resultsOfStory, validCount } from '../dist/results.js';
+import { forgetResults, initialPanelState, invalidCount, reducePanel, rememberResult, resultsOfStory, uiResultOf, validCount } from '../dist/results.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount } from '../dist/remount.js';
 import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
@@ -21,6 +21,7 @@ import {
   headline,
   INVALID_TIMEOUT_PARAMETER_MESSAGE,
   isFailingNotice,
+  isSkippedReport,
   methodColor,
   operationUrl,
   PARTIAL_TEXT,
@@ -2787,4 +2788,60 @@ test('an unreadable pair fails the story in mode error with the notice as headli
     assert.match(report.headline, /^Mokapi: could not read the mocked request or response: .*already used/);
     assert.equal(report.status, status);
   }
+});
+
+const judgedPanel = (storyId, report) => ({ ...initialPanelState, storyId, renderId: 3, testMode: 'warning', report });
+const warningReport = { status: 'warning', headline: '1 response does not match the contract.', invalid: 1, valid: 0 };
+const skippedReport = { status: 'passed', headline: '', invalid: 0, valid: 0 };
+
+test('rememberResult keeps the state of a story with a verdict and ignores states without one', () => {
+  const warned = judgedPanel('a--one', warningReport);
+  const remembered = rememberResult({}, warned);
+  assert.deepEqual(remembered, { 'a--one': warned });
+  assert.equal(rememberResult(remembered, judgedPanel('a--one', skippedReport)), remembered);
+  assert.equal(rememberResult(remembered, { ...initialPanelState, storyId: 'a--one' }), remembered);
+  assert.equal(rememberResult(remembered, initialPanelState), remembered);
+  const passed = judgedPanel('a--one', { status: 'passed', headline: '', invalid: 0, valid: 1 });
+  assert.deepEqual(rememberResult(remembered, passed), { 'a--one': passed });
+});
+
+test('forgetResults drops the given stories and returns the same object when none is known', () => {
+  const results = { 'a--one': judgedPanel('a--one', warningReport), 'a--two': judgedPanel('a--two', warningReport) };
+  assert.deepEqual(Object.keys(forgetResults(results, ['a--one', 'a--three'])), ['a--two']);
+  assert.equal(forgetResults(results, ['a--three']), results);
+});
+
+test('the panel shows the last result of a story while its mount is running or skipped, and its own verdict otherwise', () => {
+  const last = judgedPanel('a--one', warningReport);
+  const results = { 'a--one': last };
+  const running = { ...initialPanelState, storyId: 'a--one', renderId: 4, testMode: 'warning' };
+  assert.equal(uiResultOf(running, results, 'a--one'), last);
+  assert.equal(uiResultOf(judgedPanel('a--one', skippedReport), results, 'a--one'), last);
+  assert.equal(uiResultOf(initialPanelState, results, 'a--one'), last);
+  // after navigating to another story its state is in the slot, the result of the first story is still there
+  assert.equal(uiResultOf(judgedPanel('a--two', warningReport), results, 'a--one'), last);
+
+  const passed = judgedPanel('a--one', { status: 'passed', headline: '', invalid: 0, valid: 1 });
+  assert.equal(uiResultOf(passed, results, 'a--one'), passed);
+  // a first mount without a result shows its skip, a story without any state shows nothing
+  const skipped = judgedPanel('a--one', skippedReport);
+  assert.equal(uiResultOf(skipped, {}, 'a--one'), skipped);
+  assert.equal(uiResultOf(initialPanelState, {}, 'a--one'), initialPanelState);
+  assert.equal(uiResultOf(initialPanelState, {}, 'constructor'), initialPanelState);
+});
+
+test('a test run result stays in the panel for a story whose mount is skipped, and wins over the last UI result', () => {
+  const last = judgedPanel('a--one', warningReport);
+  const run = { report: { status: 'failed', headline: 'x', invalid: 0, valid: 0 }, entries: [], notices: [], testMode: 'error' };
+  const skipped = judgedPanel('a--one', skippedReport);
+  const panel = panelOf(uiResultOf(skipped, { 'a--one': last }, 'a--one'), { 'a--one': run }, 'a--one');
+  assert.equal(panel.fromTestRun, true);
+  assert.equal(panel.report.status, 'failed');
+});
+
+test('isSkippedReport is a passed report without a valid response', () => {
+  assert.equal(isSkippedReport(skippedReport), true);
+  assert.equal(isSkippedReport({ ...skippedReport, valid: 1 }), false);
+  assert.equal(isSkippedReport({ ...warningReport }), false);
+  assert.equal(isSkippedReport({ ...skippedReport, valid: undefined }), true);
 });

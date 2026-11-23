@@ -314,6 +314,9 @@ The badge depends on the test mode of the story, see
 | `SKIP` | No failing result and no valid response: every response is not in the contract, the story sent no request, the MSW worker is missing, or a handler did not answer within the [wait limit](#wait-limit) |
 
 `SKIP` is shown in the panel only. Storybook still reports the story as passed.
+A story that is mounted again and checks no response (for example because your
+app answers from a cache) keeps the result of its last check in the panel and
+the sidebar. `SKIP` only shows for a story that has no earlier result.
 The badge follows the report of the story, so a response that arrives after the
 report appears in the list but doesn't change the badge.
 `PARTIAL` changes the badge only: the report status stays `passed`, so the
@@ -545,7 +548,7 @@ Storybook's status store:
 | `failed` (mode `'error'`) | error |
 | `warning` (mode `'warning'`) | warning |
 | `passed` with at least one valid response | success |
-| skipped (`passed`, but no response was checked), mode `'off'`, validation off, `disable: true` | none |
+| skipped (`passed`, but no response was checked), mode `'off'`, validation off, `disable: true` | none, an earlier status stays |
 
 The status has the title `Mokapi`. For an error or a warning, its description is
 the headline of the [error message](#error-message), for example
@@ -556,7 +559,10 @@ Storybook's green icon in the sidebar and shows up in the filter
 response checked against the contract, gets no status, like the gray `SKIP` badge
 in the panel.
 
-A new result of the story replaces its status, and a skipped check removes it.
+A new result of the story replaces its status. A mount that checks no response
+(skipped) neither replaces nor removes it: the last result stays, in the panel as
+well, until a newer result exists, also after you switch to another story and
+back. A story that has never checked a response has no status.
 Switching to another story keeps the status. **Clear all statuses** in the
 testing module removes all Mokapi statuses, the success statuses included.
 Without a new report, a status stays when you switch validation off.

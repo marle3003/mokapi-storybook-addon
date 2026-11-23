@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { delay, http, HttpResponse, passthrough } from 'msw';
 import { jane, profileHandler, userHandler } from './handlers';
 import { Profile } from './Profile';
@@ -30,6 +31,23 @@ export const WarningHeld = {
       })],
     },
   },
+};
+
+// Like an app with a data cache that lives as long as the page: the first mount requests the profile, later mounts
+// of the story find it in the cache, so MSW sees no request and the mount validates nothing.
+let cachedName: Promise<string> | undefined;
+function CachedProfile() {
+  const [name, setName] = useState('Loading...');
+  useEffect(() => {
+    cachedName ??= fetch('/api/profile').then(async (response) => (await response.json()).name);
+    void cachedName.then(setName);
+  }, []);
+  return <p data-testid="profile">{name}</p>;
+}
+
+export const WarningCached = {
+  render: () => <CachedProfile />,
+  parameters: { mokapi: { test: 'warning' }, msw: { handlers: [profileHandler(invalidProfile)] } },
 };
 
 export const OffInvalid = {

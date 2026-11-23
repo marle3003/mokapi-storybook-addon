@@ -128,9 +128,12 @@ export function countLine(entries: Entry[]): string | undefined {
 // The report and the status store are untyped at runtime, so only a positive integer counts as a count.
 const isPositiveCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) > 0;
 
-// A passed report alone doesn't say that anything was checked: without a valid response it was skipped. The count is
-// the one of the report, so the badge, the sidebar status and the test result agree, also when a response arrives later.
-const isSkipped = (report: Report): boolean => report.status === 'passed' && !isPositiveCount(report.valid);
+/**
+ * A passed report that checked no response: the mount had nothing to judge, so it is no result. A passed report alone
+ * doesn't say that anything was checked. The count is the one of the report, so the badge, the sidebar status and the
+ * test result agree, also when a response arrives later.
+ */
+export const isSkippedReport = (report: Report): boolean => report.status === 'passed' && !isPositiveCount(report.valid);
 
 export const SKIP_HEADLINE = 'No response was checked against the contract.';
 
@@ -138,7 +141,7 @@ export const SKIP_HEADLINE = 'No response was checked against the contract.';
 // handler that did not answer, which are no failures, so the generic text would hide the cause.
 export function reportHeadline(report: Report | undefined, { notices }: Pick<PanelState, 'notices'>): string | undefined {
   if (report === undefined) return undefined;
-  if (isSkipped(report)) return notices.find(({ kind }) => kind === 'worker-missing' || kind === 'handler-timeout')?.message ?? SKIP_HEADLINE;
+  if (isSkippedReport(report)) return notices.find(({ kind }) => kind === 'worker-missing' || kind === 'handler-timeout')?.message ?? SKIP_HEADLINE;
   return report.status === 'passed' ? undefined : report.headline;
 }
 
@@ -161,7 +164,7 @@ const PARTIAL_BADGE: ReportBadge = { label: 'PARTIAL', status: 'positive' };
 export function reportBadge(testMode: TestMode | undefined, report: Report | undefined, partial = false): ReportBadge | undefined {
   if (testMode === undefined || testMode === 'off') return undefined;
   if (report === undefined) return { label: 'WAIT', status: 'mediumdark' };
-  if (isSkipped(report)) return { label: 'SKIP', status: 'mediumdark' };
+  if (isSkippedReport(report)) return { label: 'SKIP', status: 'mediumdark' };
   return partial && report.status === 'passed' ? PARTIAL_BADGE : REPORT_BADGES[report.status];
 }
 
@@ -253,7 +256,7 @@ const SIDEBAR_VALUES: Record<ReportStatus, Status['value']> = {
 // A passed report with a valid response is a success, so the sidebar shows that Mokapi checked the story. A skipped
 // report (passed without a valid count) and a story without a report have no status: nothing was checked.
 export function sidebarStatus(storyId: string, report: Report | undefined): Status | undefined {
-  if (report === undefined || isSkipped(report)) return undefined;
+  if (report === undefined || isSkippedReport(report)) return undefined;
   return {
     typeId: STATUS_TYPE_ID,
     storyId,

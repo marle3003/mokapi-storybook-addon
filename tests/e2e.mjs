@@ -1647,6 +1647,25 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertSidebarStatus(page, held, 'Warning');
     });
 
+    await scenario('a story that is mounted again without a request keeps its warning in the panel and the sidebar', async (page) => {
+      const cached = 'profile--warning-cached';
+      await openValidated(page, cached);
+      await showsText(reportBadge(page), 'WARN');
+      await entries(page, 'invalid').waitFor();
+      await assertSidebarStatus(page, cached, 'Warning');
+
+      // The second mount is answered from the story's cache: no request, so the mount validates nothing.
+      await page.locator('[id="profile--valid"]').click();
+      await showsText(reportBadge(page), 'PASS');
+      await page.locator(`[id="${cached}"]`).click();
+      await profileInPreview(page).getByText('Jane Doe').waitFor();
+      await waitForFinishedRender(page);
+      await assertCountStays(reportBadge(page), 1);
+      await showsText(reportBadge(page), 'WARN');
+      await entries(page, 'invalid').waitFor();
+      await assertSidebarStatus(page, cached, 'Warning');
+    });
+
     await scenario('with test error a response that does not match the contract fails the story', async (page) => {
       await openValidated(page, 'profile--error-invalid');
       await assertStoryFails(page, /^1 response does not match the contract\.$/);

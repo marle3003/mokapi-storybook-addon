@@ -1,3 +1,4 @@
+import { isSkippedReport } from './report.js';
 import type { TestMode } from './types.js';
 import type { Operation, ValidationError } from './validation.js';
 
@@ -92,3 +93,27 @@ export const invalidCount = (state: Pick<PanelState, 'entries'>): number =>
 
 export const validCount = (state: Pick<PanelState, 'entries'>): number =>
   state.entries.filter(({ status }) => status === 'valid').length;
+
+/** The last panel result of each story that judged something, so a mount that validates nothing doesn't replace it. */
+export type LastResults = Readonly<Record<string, PanelState>>;
+
+/** Keeps the state of a story that has a report with a verdict; anything else (no report, skipped) leaves the results as they are. */
+export function rememberResult(results: LastResults, state: PanelState): LastResults {
+  if (state.storyId === undefined || state.report === undefined || isSkippedReport(state.report)) return results;
+  return { ...results, [state.storyId]: state };
+}
+
+export function forgetResults(results: LastResults, storyIds: readonly string[]): LastResults {
+  const remaining = Object.entries(results).filter(([storyId]) => !storyIds.includes(storyId));
+  return remaining.length === Object.keys(results).length ? results : Object.fromEntries(remaining);
+}
+
+/**
+ * What the panel shows of the UI for a story: the mount's own state once it has a verdict, otherwise (still running, or
+ * a skipped mount) the last result of the story. Without a last result the mount's state, so a first mount shows its skip.
+ */
+export function uiResultOf(ui: PanelState, results: LastResults, storyId: string): PanelState {
+  const own = resultsOfStory(ui, storyId);
+  const judged = own.report !== undefined && !isSkippedReport(own.report);
+  return judged || !Object.hasOwn(results, storyId) ? own : results[storyId];
+}

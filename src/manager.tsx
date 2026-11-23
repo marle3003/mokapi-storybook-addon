@@ -20,6 +20,7 @@ import {
   KIND_LABELS,
   methodColor,
   PARTIAL_TEXT,
+  isSkippedReport,
   reportBadge,
   reportHeadline,
   sidebarStatus,
@@ -34,10 +35,14 @@ import {
 } from './report.js';
 import {
   PANEL_EVENT,
+  forgetResults,
   initialPanelState,
   invalidCount,
   reducePanel,
+  rememberResult,
+  uiResultOf,
   type Entry,
+  type LastResults,
   type MessageDetails,
   type Notice,
   type PanelAction,
@@ -67,6 +72,8 @@ const TEST_RUN_CHANNEL = 'storybook/test/channel';
 let panelState: PanelState = initialPanelState;
 // What the last test run found out per story. The panel shows it until the UI reports a newer result.
 let testRuns: StoryRuns = {};
+// The last UI result of each story that checked a response. A mount that checks nothing leaves it as it is.
+let lastResults: LastResults = {};
 // The validating mounts that have not reported yet, so a report that a test run has overtaken doesn't replace the run.
 let mounts: Mounts = {};
 // Fed by the render phases, so Rerun is right even when the panel opens while a story renders.
@@ -80,8 +87,14 @@ function receive(action: PanelAction): void {
   notifySubscribers();
 }
 
+function rememberPanelResult(): void {
+  lastResults = rememberResult(lastResults, panelState);
+  notifySubscribers();
+}
+
 function receiveTestRun(payload: TestRunPayload): void {
   testRuns = applyTestRun(testRuns, payload);
+  lastResults = forgetResults(lastResults, ranStoryIds(payload));
   mounts = overtakeMounts(mounts, payload);
   notifySubscribers();
 }
@@ -95,6 +108,7 @@ function forgetTestRun(storyId: string): void {
 
 function clearTestRuns(): void {
   testRuns = {};
+  lastResults = {};
   mounts = releaseOvertaken(mounts);
   notifySubscribers();
 }
@@ -112,7 +126,9 @@ function subscribe(notify: () => void): () => void {
 function useResultsOfSelectedStory(): StoryPanel {
   const state = useSyncExternalStore(subscribe, () => panelState);
   const runs = useSyncExternalStore(subscribe, () => testRuns);
-  return panelOf(state, runs, useStorybookState().storyId);
+  const last = useSyncExternalStore(subscribe, () => lastResults);
+  const { storyId } = useStorybookState();
+  return panelOf(uiResultOf(state, last, storyId), runs, storyId);
 }
 
 const PanelRoot = styled.div(({ theme }) => ({
@@ -479,16 +495,14 @@ addons.register('mokapi', (api) => {
   };
   api.on(PANEL_EVENT, (action: PanelAction) => {
     receive(action);
-    if (action.type === 'render-started' && action.testMode) {
-      // A mount that validates is newer than the last test run. A mount without validation is not.
-      mounts = startValidatingMount(mounts, action.storyId);
-      forgetTestRun(action.storyId);
-    }
+    if (action.type === 'render-started' && action.testMode) mounts = startValidatingMount(mounts, action.storyId);
     if (action.type !== 'report') return;
     const settled = settleReport(mounts, action.storyId);
     mounts = settled.mounts;
-    if (settled.overtaken) return;
+    // A report older than a test run, or a mount that checked nothing, is no newer result: the last one stays.
+    if (settled.overtaken || isSkippedReport(action)) return;
     forgetTestRun(action.storyId);
+    rememberPanelResult();
     updateStatuses([[action.storyId, action]]);
   });
   api.on(TEST_RUN_CHANNEL, (event: unknown) => {
