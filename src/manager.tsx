@@ -6,7 +6,7 @@ import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDE
 import { ActionList, Badge, Form, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
 import { CheckIcon, CircleHollowIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
 import { Global, styled, useTheme } from 'storybook/theming';
-import { initialRemountState, nextRemount, type RemountEvent } from './remount.js';
+import { initialRemountState, nextRemount, remountIfSelected, type RemountEvent } from './remount.js';
 import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
 import {
   BODY_LIMIT,
@@ -525,7 +525,8 @@ addons.register('mokapi', (api) => {
   const handle = (event: RemountEvent): void => {
     const next = nextRemount(remount, event);
     remount = next.state;
-    if (next.remount) api.emit(FORCE_REMOUNT, { storyId: next.remount });
+    const storyId = remountIfSelected(next.remount, api.getUrlState().storyId);
+    if (storyId) api.emit(FORCE_REMOUNT, { storyId });
   };
   // The preview announces the initial globals with SET_GLOBALS, later changes with GLOBALS_UPDATED.
   api.on(SET_GLOBALS, ({ globals }: { globals: Record<string, unknown> }) => handle({ type: 'initial', validation: globals.mokapiValidation }));

@@ -58,3 +58,9 @@ export function nextRemount(state: RemountState, event: RemountEvent): { state: 
       return { state: { validation: state.validation } };
   }
 }
+
+// The manager's selection changes on the click, before its STORY_CHANGED arrives, so a pending remount can
+// belong to a story that was left in the meantime. Storybook would render it next to the newly selected story.
+export function remountIfSelected(remount: string | undefined, selectedStoryId: string | undefined): string | undefined {
+  return remount === selectedStoryId ? remount : undefined;
+}

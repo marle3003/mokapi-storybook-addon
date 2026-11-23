@@ -738,7 +738,10 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
       // Switching validation off and on renders the story again: one entry, not two.
       await switchValidationAndWait(page, 'off');
-      await switchValidation(page, 'on');
+      // The panel remembers the last result of the story, so the request count proves the re-render and the remount ran.
+      const sent = trackValidationRequests(page, dashboard);
+      await switchValidationAndWait(page, 'on');
+      await eventually(() => assert.equal(sent.length, 1));
       await entries(page, 'valid').waitFor();
       assert.equal(await entries(page).count(), 1);
 

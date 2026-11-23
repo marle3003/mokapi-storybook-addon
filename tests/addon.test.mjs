@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { resolveOptions } from '../dist/index.js';
 import { forgetResults, initialPanelState, invalidCount, reducePanel, rememberResult, resultsOfStory, uiResultOf, validCount } from '../dist/results.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
-import { initialRemountState, nextRemount } from '../dist/remount.js';
+import { initialRemountState, nextRemount, remountIfSelected } from '../dist/remount.js';
 import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
 import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, readTestRun, readTestRunEvent, releaseOvertaken, settleReport, startValidatingMount, testRunResults } from '../dist/test-run.js';
 import { toggleState } from '../dist/toggle.js';
@@ -2369,6 +2369,14 @@ test('a second switch while the re-render runs remounts once after the latest re
   const immediate = [initialValidation('off'), started(), switched('on'), started(), switched('off'), started()];
   assert.deepEqual(remountSteps(...immediate, finished()), []);
   assert.deepEqual(remountSteps(...immediate, finished(), finished()), ['a--one']);
+});
+
+// The click on another story changes the manager's selection before its STORY_CHANGED arrives, so the
+// remount of the old story is still pending then. Remounting it would render the old story next to the new one.
+test('a remount is dropped when its story is no longer the selected one', () => {
+  assert.equal(remountIfSelected('a--one', 'a--one'), 'a--one');
+  assert.equal(remountIfSelected('a--one', 'a--two'), undefined);
+  assert.equal(remountIfSelected(undefined, 'a--one'), undefined);
 });
 
 test('a story change clears the running render, so a later switch does not skip a finished', () => {

@@ -29,10 +29,14 @@ async function loadManager() {
     getAll: () => ({}),
     onSelect: () => {},
   };
+  const emitted = [];
+  const url = { viewMode: 'story', storyId: undefined };
   const api = {
     on: (event, handler) => handlers.set(event, handler),
-    emit: () => {},
+    emit: (event, payload) => emitted.push({ event, payload }),
     getGlobals: () => ({ mokapiValidation: 'on' }),
+    getUrlState: () => url,
+    getCurrentStoryData: () => ({ id: url.storyId }),
   };
   const fakes = new Proxy({
     addons: { register: (_, callback) => callback(api), add: () => {} },
@@ -59,6 +63,9 @@ async function loadManager() {
     emitPanel: (action) => handlers.get('mokapi/validation')(action),
     emitTestRun: (event) => handlers.get('storybook/test/channel')(event),
     sidebarStatus: (storyId) => statuses.get(storyId)?.value,
+    emitChannel: (event, payload) => handlers.get(event)(payload),
+    select: (storyId) => { url.storyId = storyId; },
+    remounts: () => emitted.filter(({ event }) => event === 'FORCE_REMOUNT').map(({ payload }) => payload),
   };
 }
 
@@ -117,4 +124,29 @@ test('a first mount without a validated response sets no status', async () => {
   startSkippedMount(manager, 1);
 
   assert.equal(manager.sidebarStatus(STORY), undefined);
+});
+
+// Switches validation on while `a--one` is selected and lets its re-render finish after `afterSwitch` ran.
+async function switchValidationOn(afterSwitch) {
+  const manager = await loadManager();
+  manager.select('a--one');
+  manager.emitChannel('SET_GLOBALS', { globals: { mokapiValidation: 'off' } });
+  manager.emitChannel('GLOBALS_UPDATED', { globals: { mokapiValidation: 'on' } });
+  manager.emitChannel('STORY_RENDER_PHASE_CHANGED', { newPhase: 'loading', storyId: 'a--one' });
+  afterSwitch(manager);
+  manager.emitChannel('STORY_RENDER_PHASE_CHANGED', { newPhase: 'finished', storyId: 'a--one' });
+  return manager;
+}
+
+test('a switch remounts the story once its re-render has finished while it is still selected', async () => {
+  const manager = await switchValidationOn(() => {});
+
+  assert.deepEqual(manager.remounts(), [{ storyId: 'a--one' }]);
+});
+
+// The click selects the next story before STORY_CHANGED reaches the manager.
+test('a switch does not remount the story when another story was selected before its re-render finished', async () => {
+  const manager = await switchValidationOn((m) => m.select('a--two'));
+
+  assert.deepEqual(manager.remounts(), []);
 });
