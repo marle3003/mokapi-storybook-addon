@@ -1,17 +1,20 @@
+import { DEFAULT_TIMEOUT_MS } from './options.js';
 import {
   errorMessage,
+  handlerTimeoutMessage,
   headline,
   INVALID_PARTIAL_PARAMETER_MESSAGE,
   INVALID_TEST_PARAMETER_MESSAGE,
+  INVALID_TIMEOUT_PARAMETER_MESSAGE,
   operationUrl,
   QUIET_WINDOW_MAX_MS,
   QUIET_WINDOW_MS,
   reportStatus,
   resolvePartial,
   resolveTestMode,
+  resolveTimeout,
   timeoutMessage,
   truncateBody,
-  VALIDATION_TIMEOUT_MS,
 } from './report.js';
 import { initialPanelState, invalidCount, reducePanel, validCount, type Entry, type MessageDetails, type Notice, type PanelAction, type PanelState } from './results.js';
 import type { MokapiStoryParameters, TestMode } from './types.js';
@@ -39,7 +42,7 @@ interface MswWorker {
 export interface HookContext {
   id: string;
   globals: Record<string, unknown>;
-  parameters: { mokapi?: Omit<MokapiStoryParameters, 'test' | 'partial'> & { test?: unknown; partial?: unknown } };
+  parameters: { mokapi?: Omit<MokapiStoryParameters, 'test' | 'partial' | 'timeout'> & { test?: unknown; partial?: unknown; timeout?: unknown } };
   msw?: unknown;
   /** One per mount: Storybook keeps it for the re-renders of a mount and creates a new one for every mount. */
   abortSignal?: AbortSignal;
@@ -56,11 +59,14 @@ export interface HookOptions {
   dashboardUrl: string;
   defaultTest: TestMode;
   defaultPartial: boolean;
+  defaultTimeout: number;
 }
 
 // A request that MSW started and that Mokapi has not validated yet, which afterEach waits for.
 interface InFlight {
   label: string;
+  /** MSW delivered the response (`response:mocked`): without it the handler has not answered. */
+  mocked: boolean;
   done: Promise<void>;
   finish: () => void;
   finished: boolean;
@@ -77,6 +83,8 @@ interface Render {
   /** Requests are sent to Mokapi, i.e. validating and a worker to listen to. */
   sending: boolean;
   mode: TestMode;
+  /** How long afterEach waits for this render, in milliseconds. */
+  timeout: number;
   /** What the panel shows for this render, so the report holds exactly that. */
   state: PanelState;
   inFlight: Map<string, InFlight>;
@@ -86,7 +94,7 @@ interface Render {
 
 // The listener lives as long as the worker, the story changes with every render: each hook run
 // replaces this slot and the listener reads it.
-let current: Render = newRender(0, { partial: false, validating: false, sending: false, mode: 'off' });
+let current: Render = newRender(0, { partial: false, validating: false, sending: false, mode: 'off', timeout: DEFAULT_TIMEOUT_MS });
 // A component may fetch again after a render, so the response can arrive when the next render has
 // already started. The request belongs to the render that was current when it started.
 const startedIn = new Map<string, Render>();
@@ -102,8 +110,8 @@ let renderCount = 0;
 let capturedCount = 0;
 const observedWorkers = new WeakSet<object>();
 
-function newRender(renderId: number, { api, partial, validating, sending, mode }: Pick<Render, 'api' | 'partial' | 'validating' | 'sending' | 'mode'>): Render {
-  return { renderId, api, partial, validating, sending, mode, state: initialPanelState, inFlight: new Map() };
+function newRender(renderId: number, { api, partial, validating, sending, mode, timeout }: Pick<Render, 'api' | 'partial' | 'validating' | 'sending' | 'mode' | 'timeout'>): Render {
+  return { renderId, api, partial, validating, sending, mode, timeout, state: initialPanelState, inFlight: new Map() };
 }
 
 const isWorker = (msw: unknown): msw is MswWorker =>
@@ -125,6 +133,7 @@ function trackInFlight(render: Render, { request, requestId }: StartedRequest): 
   const done = new Promise<void>((resolve) => { finish = resolve; });
   const inFlight: InFlight = {
     label: describeRequest(request),
+    mocked: false,
     done,
     finished: false,
     finish: () => {
@@ -184,6 +193,7 @@ function validate(mocked: MockedResponse, { emit, dashboardUrl }: HookOptions): 
   const render = startedIn.get(requestId) ?? current;
   const inFlight = render.inFlight.get(requestId);
   startedIn.delete(requestId);
+  if (inFlight) inFlight.mocked = true;
   if (!render.sending) return;
   const sequence = ++capturedCount;
   const time = Date.now();
@@ -222,7 +232,7 @@ function observe(worker: MswWorker, options: HookOptions): void {
 // Runs before every story render and never throws: it runs for every story of the project.
 // A mount starts a new Render and a new panel list, a re-render continues the Render of its mount.
 export function validationHook(context: HookContext, options: HookOptions): void {
-  const { api, disable, test, partial: partialParameter } = context.parameters.mokapi ?? {};
+  const { api, disable, test, partial: partialParameter, timeout: timeoutParameter } = context.parameters.mokapi ?? {};
   const validating = context.globals.mokapiValidation === 'on' && !disable;
   // A switch of the validation re-renders before the addon remounts: that render must not judge the old results.
   const mounted = context.abortSignal && rendersOfMount.get(context.abortSignal);
@@ -234,8 +244,9 @@ export function validationHook(context: HookContext, options: HookOptions): void
   const { mode, invalid } = resolveTestMode(test, options.defaultTest);
   const resolvedPartial = resolvePartial(partialParameter, options.defaultPartial);
   const partial = validating && resolvedPartial.partial;
+  const resolvedTimeout = resolveTimeout(timeoutParameter, options.defaultTimeout);
   const worker = isWorker(context.msw) ? context.msw : undefined;
-  const render = newRender(++renderCount, { api, partial, validating, sending: validating && worker !== undefined, mode });
+  const render = newRender(++renderCount, { api, partial, validating, sending: validating && worker !== undefined, mode, timeout: resolvedTimeout.timeout });
   current = render;
   rendersOfContext.set(context, render);
   if (context.abortSignal) rendersOfMount.set(context.abortSignal, render);
@@ -246,6 +257,7 @@ export function validationHook(context: HookContext, options: HookOptions): void
   }
   if (validating && invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TEST_PARAMETER_MESSAGE } });
   if (validating && resolvedPartial.invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_PARTIAL_PARAMETER_MESSAGE } });
+  if (validating && resolvedTimeout.invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TIMEOUT_PARAMETER_MESSAGE } });
   if (worker !== undefined) return observe(worker, options);
   if (validating) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'worker-missing', message: WORKER_MISSING } });
 }
@@ -286,15 +298,21 @@ MokapiContractError.prototype.name = 'MokapiContractError';
 // `isTestEnvironment` checks it too). Vitest fails a test only on a thrown error, not on a failed report.
 const isVitestBrowserRun = (): boolean => (globalThis as { __vitest_browser__?: unknown }).__vitest_browser__ === true;
 
+// Once MSW delivered the response only Mokapi is missing, which fails the story. Without a response the handler is
+// still working (a loading skeleton delays on purpose), so nothing was validated and nothing failed.
+const timeoutNotice = ({ label, mocked }: InFlight, timeoutMs: number): Notice => mocked
+  ? { kind: 'timeout', message: timeoutMessage(label, timeoutMs) }
+  : { kind: 'handler-timeout', message: handlerTimeoutMessage(label, timeoutMs) };
+
 // Runs after every story: waits for the validations, reports the result to Storybook and the panel. A failed
 // report alone makes Storybook finish the story with status error, so in error mode it throws only under Vitest.
-// The 4 s limit counts from the start, the quiet window included.
+// The limit (`render.timeout`) counts from the start, the quiet window included.
 export async function testHook(context: TestContext, options: HookOptions): Promise<void> {
   const render = rendersOfContext.get(context);
   if (render === undefined || !render.validating || render.mode === 'off') return;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<Outcome>((resolve) => { timer = setTimeout(() => resolve('timeout'), VALIDATION_TIMEOUT_MS); });
+  const timeout = new Promise<Outcome>((resolve) => { timer = setTimeout(() => resolve('timeout'), render.timeout); });
   const aborted = untilAborted(context.abortSignal);
   try {
     const quiet = await Promise.race([untilQuiet(render).then((): Outcome => 'finished'), aborted]);
@@ -305,11 +323,8 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
     const outcome = await Promise.race([validated, timeout, aborted]);
     if (outcome === 'aborted') return;
     if (outcome === 'timeout') {
-      waiting.filter(({ finished }) => !finished).forEach(({ label }) => announce(render, options.emit, {
-        type: 'notice',
-        renderId: render.renderId,
-        notice: { kind: 'timeout', message: timeoutMessage(label) },
-      }));
+      waiting.filter(({ finished }) => !finished)
+        .forEach((request) => announce(render, options.emit, { type: 'notice', renderId: render.renderId, notice: timeoutNotice(request, render.timeout) }));
     }
   } finally {
     clearTimeout(timer);

@@ -18,6 +18,7 @@ const hookOptions = (): HookOptions => ({
   dashboardUrl: options.dashboardUrl,
   defaultTest: options.defaultTest,
   defaultPartial: options.defaultPartial,
+  defaultTimeout: options.defaultTimeout,
 });
 
 // Storybook runs beforeEach after all loaders, so `context.msw` is set by then.

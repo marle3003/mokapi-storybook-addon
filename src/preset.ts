@@ -3,8 +3,10 @@ import { mergeConfig, type InlineConfig } from 'vite';
 import { resolveOptions } from './options.js';
 import type { MokapiAddonOptions } from './types.js';
 
+// First, so the Mokapi afterEach runs last: Storybook runs the project's afterEach hooks in reverse order of the
+// annotation files. The Mokapi hook waits for the validations, so other addons' checks must not wait for it.
 export function previewAnnotations(entries: string[] = []): string[] {
-  return [...entries, fileURLToPath(new URL('./preview.js', import.meta.url))];
+  return [fileURLToPath(new URL('./preview.js', import.meta.url)), ...entries];
 }
 
 export function managerEntries(entries: string[] = []): string[] {

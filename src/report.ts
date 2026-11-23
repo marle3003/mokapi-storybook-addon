@@ -1,10 +1,9 @@
-import { isTestMode } from './options.js';
+import { isPositiveNumber, isTestMode } from './options.js';
 import type { Status, StatusesByStoryIdAndTypeId } from 'storybook/internal/types';
 import type { Entry, Notice, PanelState, Report, ReportStatus } from './results.js';
 import type { TestMode } from './types.js';
 import type { Operation } from './validation.js';
 
-export const VALIDATION_TIMEOUT_MS = 4000;
 // A request is started by the component after the story rendered and reaches `request:start` only after
 // MSW's service worker answered, so afterEach waits until no request has started for a moment.
 export const QUIET_WINDOW_MS = 100;
@@ -22,9 +21,21 @@ export function operationUrl(dashboardUrl: string, { api, method, path }: Operat
 export const INVALID_TEST_PARAMETER_MESSAGE = "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.";
 export const INVALID_PARTIAL_PARAMETER_MESSAGE = 'Mokapi: parameters.mokapi.partial must be true or false.';
 
+export const INVALID_TIMEOUT_PARAMETER_MESSAGE = 'Mokapi: parameters.mokapi.timeout must be a positive number.';
+
+// 4000 is `4 s`, 1500 is `1.5 s`.
+const seconds = (timeoutMs: number): string => `${timeoutMs / 1000} s`;
+
+const LIMIT_OPTIONS = 'parameters.mokapi.timeout or defaultTimeout';
+
 // `request` is the method and path with query, e.g. `GET /api/profile/1`.
-export const timeoutMessage = (request: string): string =>
-  `Mokapi validation did not finish within ${VALIDATION_TIMEOUT_MS / 1000} s (${request}).`;
+// MSW delivered a response and Mokapi has not judged it in time.
+export const timeoutMessage = (request: string, timeoutMs: number): string =>
+  `Mokapi validation did not finish within ${seconds(timeoutMs)} (${request}). Increase ${LIMIT_OPTIONS}.`;
+
+// The handler has not answered in time, which is on purpose for a loading skeleton: nothing was validated.
+export const handlerTimeoutMessage = (request: string, timeoutMs: number): string =>
+  `No response from the MSW handler within ${seconds(timeoutMs)} (${request}), not validated. If the response is delayed on purpose, increase ${LIMIT_OPTIONS}.`;
 
 // An invalid value falls back to the project default; the caller reports it as configuration error.
 export function resolveTestMode(parameter: unknown, defaultTest: TestMode): { mode: TestMode; invalid: boolean } {
@@ -38,6 +49,12 @@ export function resolvePartial(parameter: unknown, defaultPartial: boolean): { p
   return typeof parameter === 'boolean' ? { partial: parameter, invalid: false } : { partial: defaultPartial, invalid: true };
 }
 
+// An invalid value falls back to the project default; the caller reports it as configuration error.
+export function resolveTimeout(parameter: unknown, defaultTimeout: number): { timeout: number; invalid: boolean } {
+  if (parameter === undefined) return { timeout: defaultTimeout, invalid: false };
+  return isPositiveNumber(parameter) ? { timeout: parameter, invalid: false } : { timeout: defaultTimeout, invalid: true };
+}
+
 const TEST_MODE_TEXTS: Record<TestMode, string> = {
   error: 'Test mode: error. Contract errors make this story fail.',
   warning: 'Test mode: warning. Contract errors are reported as warnings, the story stays green.',
@@ -49,14 +66,16 @@ export const testModeText = (mode: TestMode): string => TEST_MODE_TEXTS[mode];
 // A PASS of a partial story doesn't mean the mock is complete, so the panel says so.
 export const PARTIAL_TEXT = 'Partial responses: missing properties are not checked.';
 
-// Not in contract and a missing worker are shown in the panel only: a project with partial contracts
-// would get a warning on every story otherwise.
+// Not in contract, a missing worker and a handler that never answers are shown in the panel only: a project with
+// partial contracts or loading skeleton stories would get a warning on every story otherwise.
 const FAILING_NOTICES: readonly Notice['kind'][] = ['unreachable', 'endpoint-missing', 'config-error', 'timeout', 'partial-unsupported'];
+
+export const isFailingNotice = (kind: Notice['kind']): boolean => FAILING_NOTICES.includes(kind);
 
 type Results = Pick<PanelState, 'entries' | 'notices'>;
 
 const invalidEntries = ({ entries }: Results): Entry[] => entries.filter(({ status }) => status === 'invalid');
-const failingNotices = ({ notices }: Results): Notice[] => notices.filter(({ kind }) => FAILING_NOTICES.includes(kind));
+const failingNotices = ({ notices }: Results): Notice[] => notices.filter(({ kind }) => isFailingNotice(kind));
 
 export function reportStatus(state: Results, mode: TestMode): ReportStatus {
   if (invalidEntries(state).length === 0 && failingNotices(state).length === 0) return 'passed';
@@ -106,17 +125,20 @@ export function countLine(entries: Entry[]): string | undefined {
   return [validated, ...kinds].join(', ');
 }
 
-// A passed report alone doesn't say that anything was checked: without a valid response it was skipped.
-const isSkipped = (report: Report, entries: Entry[]): boolean =>
-  report.status === 'passed' && !entries.some(({ status }) => status === 'valid');
+// The report and the status store are untyped at runtime, so only a positive integer counts as a count.
+const isPositiveCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) > 0;
+
+// A passed report alone doesn't say that anything was checked: without a valid response it was skipped. The count is
+// the one of the report, so the badge, the sidebar status and the test result agree, also when a response arrives later.
+const isSkipped = (report: Report): boolean => report.status === 'passed' && !isPositiveCount(report.valid);
 
 export const SKIP_HEADLINE = 'No response was checked against the contract.';
 
-// A report that passed with a valid response has nothing to say beyond its badge. A skip names a missing worker,
-// which is no failure, so the generic text would hide the cause.
-export function reportHeadline(report: Report | undefined, { entries, notices }: Results): string | undefined {
+// A report that passed with a valid response has nothing to say beyond its badge. A skip names a missing worker or a
+// handler that did not answer, which are no failures, so the generic text would hide the cause.
+export function reportHeadline(report: Report | undefined, { notices }: Pick<PanelState, 'notices'>): string | undefined {
   if (report === undefined) return undefined;
-  if (isSkipped(report, entries)) return notices.find(({ kind }) => kind === 'worker-missing')?.message ?? SKIP_HEADLINE;
+  if (isSkipped(report)) return notices.find(({ kind }) => kind === 'worker-missing' || kind === 'handler-timeout')?.message ?? SKIP_HEADLINE;
   return report.status === 'passed' ? undefined : report.headline;
 }
 
@@ -136,10 +158,10 @@ const PARTIAL_BADGE: ReportBadge = { label: 'PARTIAL', status: 'positive' };
 
 // `testMode` is set while validation is on: until the report exists the story is still validating.
 // A passed partial story is PARTIAL instead of PASS; its report status stays passed.
-export function reportBadge(testMode: TestMode | undefined, report: Report | undefined, entries: Entry[], partial = false): ReportBadge | undefined {
+export function reportBadge(testMode: TestMode | undefined, report: Report | undefined, partial = false): ReportBadge | undefined {
   if (testMode === undefined || testMode === 'off') return undefined;
   if (report === undefined) return { label: 'WAIT', status: 'mediumdark' };
-  if (isSkipped(report, entries)) return { label: 'SKIP', status: 'mediumdark' };
+  if (isSkipped(report)) return { label: 'SKIP', status: 'mediumdark' };
   return partial && report.status === 'passed' ? PARTIAL_BADGE : REPORT_BADGES[report.status];
 }
 
@@ -228,13 +250,10 @@ const SIDEBAR_VALUES: Record<ReportStatus, Status['value']> = {
   failed: 'status-value:error',
 };
 
-// The report and the status store are untyped at runtime, so only a positive integer counts as a count.
-const isPositiveCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) > 0;
-
 // A passed report with a valid response is a success, so the sidebar shows that Mokapi checked the story. A skipped
 // report (passed without a valid count) and a story without a report have no status: nothing was checked.
 export function sidebarStatus(storyId: string, report: Report | undefined): Status | undefined {
-  if (report === undefined || (report.status === 'passed' && !isPositiveCount(report.valid))) return undefined;
+  if (report === undefined || isSkipped(report)) return undefined;
   return {
     typeId: STATUS_TYPE_ID,
     storyId,

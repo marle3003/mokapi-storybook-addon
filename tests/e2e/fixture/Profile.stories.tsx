@@ -88,3 +88,9 @@ export const PartialOff = {
 export const InvalidPartialParameter = {
   parameters: { mokapi: { partial: 'yes' }, msw: { handlers: [profileHandler(jane)] } },
 };
+
+// The afterEach of the two stand-in addons in `.storybook/order-before` and `order-after` fail this story when the
+// Mokapi afterEach has already added its report, i.e. when it didn't run last.
+export const AfterEachOrder = {
+  parameters: { mokapiOrderCheck: true, msw: { handlers: [profileHandler(jane)] } },
+};

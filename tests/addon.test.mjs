@@ -17,7 +17,10 @@ import {
   errorMessage,
   formatBody,
   formatTime,
+  handlerTimeoutMessage,
   headline,
+  INVALID_TIMEOUT_PARAMETER_MESSAGE,
+  isFailingNotice,
   methodColor,
   operationUrl,
   PARTIAL_TEXT,
@@ -27,26 +30,28 @@ import {
   reportStatus,
   resolvePartial,
   resolveTestMode,
+  resolveTimeout,
   sidebarStatus,
   SKIP_HEADLINE,
   statusColor,
   statusLabel,
   statusText,
   testModeText,
+  timeoutMessage,
   truncateBody,
   widgetRow,
 } from '../dist/report.js';
 import { classify, sendValidation, serializePair, unreadableMessage } from '../dist/validation.js';
 
 test('options default to the local Mokapi dashboard and validation off', () => {
-  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'warning', defaultPartial: false });
+  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'warning', defaultPartial: false, defaultTimeout: 4000 });
   assert.deepEqual(resolveOptions({}), resolveOptions());
 });
 
 test('options keep the given values and strip trailing slashes from the dashboard URL', () => {
   assert.deepEqual(
     resolveOptions({ dashboardUrl: 'https://mokapi.example.com/', defaultValidation: true }),
-    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true, defaultTest: 'warning', defaultPartial: false },
+    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true, defaultTest: 'warning', defaultPartial: false, defaultTimeout: 4000 },
   );
 });
 
@@ -62,6 +67,13 @@ test('options accept a boolean defaultPartial and reject anything else', () => {
   for (const defaultPartial of [true, false]) assert.equal(resolveOptions({ defaultPartial }).defaultPartial, defaultPartial);
   for (const defaultPartial of ['yes', 1, null, 'true']) {
     assert.throws(() => resolveOptions({ defaultPartial }), /^Error: Mokapi: defaultPartial must be true or false\.$/);
+  }
+});
+
+test('options accept a positive finite defaultTimeout and reject anything else', () => {
+  for (const defaultTimeout of [1, 1500, 0.5, 60000]) assert.equal(resolveOptions({ defaultTimeout }).defaultTimeout, defaultTimeout);
+  for (const defaultTimeout of [0, -1, '4000', Number.NaN, Infinity, null]) {
+    assert.throws(() => resolveOptions({ defaultTimeout }), /^Error: Mokapi: defaultTimeout must be a positive number\.$/);
   }
 });
 
@@ -303,7 +315,7 @@ function recorder() {
   };
 }
 
-const hookOptions = (panel, defaultTest = 'warning', defaultPartial = false) => ({ emit: panel.emit, dashboardUrl, defaultTest, defaultPartial });
+const hookOptions = (panel, defaultTest = 'warning', defaultPartial = false, defaultTimeout = 4000) => ({ emit: panel.emit, dashboardUrl, defaultTest, defaultPartial, defaultTimeout });
 
 test('hook registers its listeners once per worker across repeated runs', () => {
   const worker = fakeWorker();
@@ -798,26 +810,76 @@ test('an invalid partial parameter falls back to defaultPartial and is flagged',
   }
 });
 
+test('the timeout parameter overrides defaultTimeout', () => {
+  for (const defaultTimeout of [4000, 8000]) {
+    assert.deepEqual(resolveTimeout(undefined, defaultTimeout), { timeout: defaultTimeout, invalid: false });
+    assert.deepEqual(resolveTimeout(10000, defaultTimeout), { timeout: 10000, invalid: false });
+    assert.deepEqual(resolveTimeout(0.5, defaultTimeout), { timeout: 0.5, invalid: false });
+  }
+});
+
+test('an invalid timeout parameter falls back to defaultTimeout and is flagged', () => {
+  assert.equal(INVALID_TIMEOUT_PARAMETER_MESSAGE, 'Mokapi: parameters.mokapi.timeout must be a positive number.');
+  for (const parameter of ['long', '4000', 0, -1, Number.NaN, Infinity, null, {}]) {
+    assert.deepEqual(resolveTimeout(parameter, 8000), { timeout: 8000, invalid: true });
+  }
+});
+
+test('the timeout texts name the request, the limit in seconds and the options that raise it', () => {
+  assert.equal(
+    timeoutMessage('GET /api/profile', 4000),
+    'Mokapi validation did not finish within 4 s (GET /api/profile). Increase parameters.mokapi.timeout or defaultTimeout.',
+  );
+  assert.equal(
+    timeoutMessage('GET /api/profile', 1500),
+    'Mokapi validation did not finish within 1.5 s (GET /api/profile). Increase parameters.mokapi.timeout or defaultTimeout.',
+  );
+  assert.equal(
+    handlerTimeoutMessage('GET /api/profile', 4000),
+    'No response from the MSW handler within 4 s (GET /api/profile), not validated. If the response is delayed on purpose, increase parameters.mokapi.timeout or defaultTimeout.',
+  );
+  assert.equal(
+    handlerTimeoutMessage('GET /api/profile', 1500),
+    'No response from the MSW handler within 1.5 s (GET /api/profile), not validated. If the response is delayed on purpose, increase parameters.mokapi.timeout or defaultTimeout.',
+  );
+});
+
+test('every notice kind is failing except a missing worker and a handler timeout', () => {
+  for (const kind of ['unreachable', 'endpoint-missing', 'config-error', 'timeout', 'partial-unsupported']) assert.equal(isFailingNotice(kind), true, kind);
+  for (const kind of ['worker-missing', 'handler-timeout']) assert.equal(isFailingNotice(kind), false, kind);
+});
+
+test('a handler timeout alone passes the report and has no headline and no error message', () => {
+  const state = stateOf([], [panelNotice('handler-timeout', 'no response (GET /a).')]);
+  for (const mode of ['error', 'warning']) assert.equal(reportStatus(state, mode), 'passed');
+  assert.equal(headline(state), '');
+  const failing = stateOf([], [panelNotice('handler-timeout', 'no response (GET /a).'), panelNotice('timeout', 'timeout (GET /b).')]);
+  assert.equal(headline(failing), 'timeout (GET /b).');
+  assert.equal(errorMessage(failing), `${FAILED}timeout (GET /b).`);
+});
+
 test('the partial text says that missing properties are not checked', () => {
   assert.equal(PARTIAL_TEXT, 'Partial responses: missing properties are not checked.');
 });
 
+// What the report counted when it was made: `valid` decides between PASS and SKIP.
+const passedReport = (valid) => ({ status: 'passed', headline: '', invalid: 0, valid });
+
 test('badge says PARTIAL, green like PASS, for a passed partial story with a valid response', () => {
   const partial = { label: 'PARTIAL', status: 'positive' };
   for (const mode of ['error', 'warning']) {
-    assert.deepEqual(reportBadge(mode, { status: 'passed', headline: '' }, [validEntry()], true), partial);
-    assert.deepEqual(reportBadge(mode, { status: 'passed', headline: '' }, [validEntry(), notInContractEntry()], true), partial);
+    assert.deepEqual(reportBadge(mode, passedReport(1), true), partial);
+    assert.deepEqual(reportBadge(mode, passedReport(2), true), partial);
   }
-  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [validEntry()], false), { label: 'PASS', status: 'positive' });
+  assert.deepEqual(reportBadge('error', passedReport(1), false), { label: 'PASS', status: 'positive' });
 });
 
 test('badge of a partial story keeps WARN, FAIL, SKIP and WAIT and shows nothing in mode off', () => {
-  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }, [invalidEntry()], true), { label: 'WARN', status: 'warning' });
-  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }, [invalidEntry()], true), { label: 'FAIL', status: 'negative' });
-  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [], true), { label: 'SKIP', status: 'mediumdark' });
-  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [notInContractEntry()], true), { label: 'SKIP', status: 'mediumdark' });
-  assert.deepEqual(reportBadge('error', undefined, [], true), { label: 'WAIT', status: 'mediumdark' });
-  assert.equal(reportBadge('off', { status: 'passed', headline: '' }, [validEntry()], true), undefined);
+  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x', invalid: 1, valid: 0 }, true), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x', invalid: 1, valid: 0 }, true), { label: 'FAIL', status: 'negative' });
+  assert.deepEqual(reportBadge('error', passedReport(0), true), { label: 'SKIP', status: 'mediumdark' });
+  assert.deepEqual(reportBadge('error', undefined, true), { label: 'WAIT', status: 'mediumdark' });
+  assert.equal(reportBadge('off', passedReport(1), true), undefined);
 });
 
 test('a partial-unsupported notice makes the report failing in mode error and a warning in mode warning', () => {
@@ -829,36 +891,30 @@ test('a partial-unsupported notice makes the report failing in mode error and a 
 });
 
 test('badge says WAIT until the report exists, in every mode but off', () => {
-  for (const mode of ['error', 'warning']) assert.deepEqual(reportBadge(mode, undefined, []), { label: 'WAIT', status: 'mediumdark' });
-  assert.equal(reportBadge('off', undefined, []), undefined);
-  assert.equal(reportBadge('off', { status: 'warning', headline: 'ignored' }, []), undefined);
-  assert.equal(reportBadge(undefined, undefined, []), undefined);
-  assert.equal(reportBadge(undefined, { status: 'passed', headline: '' }, [validEntry()]), undefined);
+  for (const mode of ['error', 'warning']) assert.deepEqual(reportBadge(mode, undefined), { label: 'WAIT', status: 'mediumdark' });
+  assert.equal(reportBadge('off', undefined), undefined);
+  assert.equal(reportBadge('off', { status: 'warning', headline: 'ignored', invalid: 1, valid: 0 }), undefined);
+  assert.equal(reportBadge(undefined, undefined), undefined);
+  assert.equal(reportBadge(undefined, passedReport(1)), undefined);
 });
 
 test('badge maps the report status to PASS, WARN and FAIL', () => {
-  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [validEntry()]), { label: 'PASS', status: 'positive' });
-  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }, [invalidEntry()]), { label: 'WARN', status: 'warning' });
-  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }, [invalidEntry()]), { label: 'FAIL', status: 'negative' });
+  assert.deepEqual(reportBadge('error', passedReport(1)), { label: 'PASS', status: 'positive' });
+  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x', invalid: 1, valid: 0 }), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x', invalid: 1, valid: 0 }), { label: 'FAIL', status: 'negative' });
 });
 
-test('badge says SKIP when a passed report has no valid response', () => {
-  const skip = { label: 'SKIP', status: 'mediumdark' };
-  const passed = { status: 'passed', headline: '' };
-  for (const mode of ['error', 'warning']) {
-    assert.deepEqual(reportBadge(mode, passed, []), skip);
-    assert.deepEqual(reportBadge(mode, passed, [notInContractEntry()]), skip);
-    assert.deepEqual(reportBadge(mode, passed, [notInContractEntry(), notInContractEntry()]), skip);
-  }
+test('badge says SKIP when a passed report counted no valid response', () => {
+  for (const mode of ['error', 'warning']) assert.deepEqual(reportBadge(mode, passedReport(0)), { label: 'SKIP', status: 'mediumdark' });
 });
 
-test('badge says PASS when one response is valid, whatever else was not in the contract', () => {
-  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [validEntry(), notInContractEntry()]), { label: 'PASS', status: 'positive' });
+test('badge says PASS when the report counted a valid response, whatever else was not in the contract', () => {
+  assert.deepEqual(reportBadge('error', passedReport(1)), { label: 'PASS', status: 'positive' });
 });
 
 test('badge keeps WARN and FAIL for a failing notice without a valid response', () => {
-  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }, []), { label: 'WARN', status: 'warning' });
-  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }, [notInContractEntry()]), { label: 'FAIL', status: 'negative' });
+  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x', invalid: 0, valid: 0 }), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x', invalid: 0, valid: 0 }), { label: 'FAIL', status: 'negative' });
 });
 
 test('status color follows the status group, anything outside 100-599 is gray', () => {
@@ -921,26 +977,37 @@ test('time is formatted as HH:mm:ss in local time, whatever the locale', () => {
 
 test('report headline is the headline of the report for a warning and a failed report only', () => {
   const invalidHeadline = '1 response does not match the contract.';
-  assert.equal(reportHeadline({ status: 'failed', headline: invalidHeadline }, stateOf([invalidEntry()])), invalidHeadline);
-  assert.equal(reportHeadline({ status: 'warning', headline: invalidHeadline }, stateOf([invalidEntry()])), invalidHeadline);
-  assert.equal(reportHeadline({ status: 'warning', headline: 'not reachable' }, stateOf([])), 'not reachable');
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([validEntry()])), undefined);
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([validEntry(), notInContractEntry()])), undefined);
+  assert.equal(reportHeadline({ status: 'failed', headline: invalidHeadline, invalid: 1, valid: 0 }, stateOf([invalidEntry()])), invalidHeadline);
+  assert.equal(reportHeadline({ status: 'warning', headline: invalidHeadline, invalid: 1, valid: 0 }, stateOf([invalidEntry()])), invalidHeadline);
+  assert.equal(reportHeadline({ status: 'warning', headline: 'not reachable', invalid: 0, valid: 0 }, stateOf([])), 'not reachable');
+  assert.equal(reportHeadline(passedReport(1), stateOf([validEntry()])), undefined);
+  assert.equal(reportHeadline(passedReport(1), stateOf([validEntry(), notInContractEntry()])), undefined);
   assert.equal(reportHeadline(undefined, stateOf([])), undefined);
 });
 
 test('report headline says that no response was checked for a passed report without a valid response', () => {
   assert.equal(SKIP_HEADLINE, 'No response was checked against the contract.');
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([])), SKIP_HEADLINE);
-  assert.equal(reportHeadline({ status: 'passed', headline: '', invalid: 0 }, stateOf([notInContractEntry()])), SKIP_HEADLINE);
+  assert.equal(reportHeadline(passedReport(0), stateOf([])), SKIP_HEADLINE);
+  assert.equal(reportHeadline(passedReport(0), stateOf([notInContractEntry()])), SKIP_HEADLINE);
 });
 
 test('report headline names the missing MSW worker for a skipped report', () => {
   const message = 'MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.';
-  const skipped = { status: 'passed', headline: '', invalid: 0 };
+  const skipped = passedReport(0);
   assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('worker-missing', message)])), message);
   assert.equal(reportHeadline(skipped, stateOf([notInContractEntry()], [panelNotice('worker-missing', message)])), message);
-  assert.equal(reportHeadline(skipped, stateOf([validEntry()], [panelNotice('worker-missing', message)])), undefined);
+  // A response that came after the report doesn't change the headline.
+  assert.equal(reportHeadline(skipped, stateOf([validEntry()], [panelNotice('worker-missing', message)])), message);
+  assert.equal(reportHeadline(passedReport(1), stateOf([validEntry()], [panelNotice('worker-missing', message)])), undefined);
+});
+
+test('report headline names the handler that did not answer for a skipped report, the first matching notice wins', () => {
+  const noAnswer = handlerTimeoutMessage('GET /api/profile', 4000);
+  const skipped = passedReport(0);
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('handler-timeout', noAnswer)])), noAnswer);
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('worker-missing', 'no worker'), panelNotice('handler-timeout', noAnswer)])), 'no worker');
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('handler-timeout', noAnswer), panelNotice('worker-missing', 'no worker')])), noAnswer);
+  assert.equal(reportHeadline(passedReport(1), stateOf([validEntry()], [panelNotice('handler-timeout', noAnswer)])), undefined);
 });
 
 test('a body is cut after 10,000 characters and flagged only when something was cut', () => {
@@ -1421,30 +1488,192 @@ test('a network error does not stop the next mocked response of the render from 
   assert.equal(context.reports[0].result.entries.length, 1);
 });
 
+// Mokapi never answers: the response was mocked, the validation stays open.
+const holdMokapi = (t) => t.mock.method(globalThis, 'fetch', () => new Promise(() => {}));
+const timeoutText = (path, seconds = 4) => `Mokapi validation did not finish within ${seconds} s (GET ${path}). Increase parameters.mokapi.timeout or defaultTimeout.`;
+const handlerTimeoutText = (path, seconds = 4) => `No response from the MSW handler within ${seconds} s (GET ${path}), not validated. If the response is delayed on purpose, increase parameters.mokapi.timeout or defaultTimeout.`;
+
 test('a validation that does not finish within 4 s fails with one notice per request', async (t) => {
   underVitest(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  holdMokapi(t);
   const panel = recorder();
   const worker = fakeWorker();
   const context = testContext(worker, failingMode);
   validationHook(context, hookOptions(panel));
   worker.started(getProfile(), 'one');
   worker.started(new Request('http://localhost:6006/api/orders'), 'two');
+  worker.mocked(getProfile(), jsonResponse(), 'one');
+  worker.mocked(new Request('http://localhost:6006/api/orders'), jsonResponse(), 'two');
   const finished = testHook(context, hookOptions(panel));
   t.mock.timers.tick(3999);
   assert.deepEqual(panel.actions.map(({ type }) => type), ['render-started']);
   t.mock.timers.tick(1);
   await assert.rejects(finished, {
     message: [
-      'Mokapi contract validation failed: Mokapi validation did not finish within 4 s (GET /api/profile?id=1).',
+      `Mokapi contract validation failed: ${timeoutText('/api/profile?id=1')}`,
       '',
-      'Mokapi validation did not finish within 4 s (GET /api/orders).',
+      timeoutText('/api/orders'),
     ].join('\n'),
   });
   assert.deepEqual(panel.actions.slice(1, 3).map(({ notice }) => notice.kind), ['timeout', 'timeout']);
   assert.equal(panel.actions[3].type, 'report');
   assert.equal(context.reports[0].status, 'failed');
   assert.equal(context.reports[0].result.notices.length, 2);
+});
+
+test('a request whose handler never answered ends as a handler timeout: nothing was validated, the story is skipped and stays green', async (t) => {
+  underVitest(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(panel));
+  t.mock.timers.tick(4000);
+  assert.equal(await finished, undefined);
+  assert.deepEqual(panel.actions.slice(1).map(({ type, notice }) => notice?.kind ?? type), ['handler-timeout', 'report']);
+  assert.equal(panel.actions[1].notice.message, handlerTimeoutText('/api/profile?id=1'));
+  assert.deepEqual(panel.actions.at(-1), { type: 'report', renderId: panel.actions[0].renderId, storyId: 'profile--valid', status: 'passed', headline: '', invalid: 0, valid: 0 });
+  assert.equal(context.reports.length, 1);
+  assert.equal(context.reports[0].status, 'passed');
+  assert.deepEqual(context.reports[0].result.notices.map(({ kind }) => kind), ['handler-timeout']);
+  assert.equal(sidebarStatus('profile--valid', panel.actions.at(-1)), undefined);
+});
+
+test('a response that MSW delivered and Mokapi did not judge in time is a failing timeout, one that MSW did not deliver is a handler timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  holdMokapi(t);
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  worker.started(getProfile(), 'mocked');
+  worker.started(requestTo('/api/orders'), 'silent');
+  worker.mocked(getProfile(), jsonResponse(), 'mocked');
+  const finished = testHook(context, hookOptions(recorder()));
+  t.mock.timers.tick(4000);
+  await finished;
+  assert.deepEqual(context.reports[0].result.notices, [
+    { kind: 'timeout', message: timeoutText('/api/profile?id=1') },
+    { kind: 'handler-timeout', message: handlerTimeoutText('/api/orders') },
+  ]);
+  assert.equal(context.reports[0].status, 'failed');
+});
+
+test('a story with one valid response and one that never comes passes with the valid entry', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile(), 'answered');
+  worker.started(requestTo('/api/orders'), 'silent');
+  worker.mocked(getProfile(), jsonResponse(), 'answered');
+  const finished = testHook(context, hookOptions(panel));
+  // The quiet window ends and Mokapi judges the answered response before the limit is reached.
+  await tick(t, 100);
+  await tick(t, 3900);
+  await finished;
+  assert.equal(context.reports[0].status, 'passed');
+  assert.deepEqual(context.reports[0].result.entries.map(({ status }) => status), ['valid']);
+  assert.deepEqual(context.reports[0].result.notices.map(({ kind }) => kind), ['handler-timeout']);
+  assert.equal(panel.actions.at(-1).valid, 1);
+});
+
+test('the limit is defaultTimeout, and the notice names it in seconds', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker);
+  validationHook(context, hookOptions(panel, 'warning', false, 1500));
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(panel, 'warning', false, 1500));
+  t.mock.timers.tick(1499);
+  assert.equal(context.reports.length, 0);
+  t.mock.timers.tick(1);
+  await finished;
+  assert.equal(context.reports[0].result.notices[0].message, handlerTimeoutText('/api/profile?id=1', 1.5));
+});
+
+test('parameters.mokapi.timeout overrides defaultTimeout for its story only', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const long = testContext(worker, { mokapi: { timeout: 10000 } });
+  const short = testContext(worker);
+  validationHook(long, hookOptions(recorder()));
+  worker.started(getProfile());
+  const longFinished = testHook(long, hookOptions(recorder()));
+  t.mock.timers.tick(9999);
+  assert.equal(long.reports.length, 0);
+  t.mock.timers.tick(1);
+  await longFinished;
+  assert.equal(long.reports[0].result.notices[0].message, handlerTimeoutText('/api/profile?id=1', 10));
+
+  validationHook(short, hookOptions(recorder()));
+  worker.started(getProfile(), 'second');
+  const shortFinished = testHook(short, hookOptions(recorder()));
+  t.mock.timers.tick(4000);
+  await shortFinished;
+  assert.equal(short.reports[0].result.notices[0].message, handlerTimeoutText('/api/profile?id=1', 4));
+});
+
+test('an invalid timeout parameter shows a configuration notice while validating and the story uses defaultTimeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, { mokapi: { timeout: 'long' } });
+  validationHook(context, hookOptions(panel, 'warning', false, 1500));
+  assert.deepEqual(panel.actions.slice(1).map(({ notice }) => notice), [
+    { kind: 'config-error', message: 'Mokapi: parameters.mokapi.timeout must be a positive number.' },
+  ]);
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(panel, 'warning', false, 1500));
+  t.mock.timers.tick(1500);
+  await finished;
+  assert.equal(context.reports[0].result.notices.at(-1).message, handlerTimeoutText('/api/profile?id=1', 1.5));
+  assert.equal(context.reports[0].status, 'warning');
+
+  const quiet = recorder();
+  validationHook(testContext(worker, { validation: 'off', mokapi: { timeout: 'long' } }), hookOptions(quiet));
+  assert.equal(quiet.actions.some(({ type }) => type === 'notice'), false);
+});
+
+test('a custom limit counts from the start of afterEach, the quiet window included', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const context = testContext(worker, { mokapi: { timeout: 1500 } });
+  validationHook(context, hookOptions(recorder()));
+  const finished = testHook(context, hookOptions(recorder()));
+  await tick(t, 50);
+  worker.started(getProfile(), 'early');
+  await tick(t, 1449);
+  assert.equal(context.reports.length, 0);
+  await tick(t, 1);
+  await finished;
+  assert.equal(context.reports[0].result.notices[0].message, handlerTimeoutText('/api/profile?id=1', 1.5));
+});
+
+test('a response after the report shows up in the panel, the report and its counts stay', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker);
+  validationHook(context, hookOptions(panel));
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(panel));
+  t.mock.timers.tick(4000);
+  await finished;
+  const report = panel.actions.at(-1);
+  assert.equal(report.valid, 0);
+  worker.mocked(getProfile(), jsonResponse());
+  await settled();
+  assert.equal(panel.actions.at(-1).type, 'result');
+  assert.equal(context.reports.length, 1);
+  assert.deepEqual(context.reports[0].result.entries, []);
+  assert.equal(panel.actions.filter(({ type }) => type === 'report').length, 1);
 });
 
 const tick = async (t, milliseconds) => { t.mock.timers.tick(milliseconds); await settled(); };
@@ -1485,6 +1714,7 @@ test('afterEach ignores a request that starts after the quiet window', async (t)
 test('the quiet window ends after 1 s even if requests keep starting, and the 4 s limit counts from the start', async (t) => {
   underVitest(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  holdMokapi(t);
   const worker = fakeWorker();
   const context = testContext(worker, failingMode);
   validationHook(context, hookOptions(recorder()));
@@ -1492,6 +1722,7 @@ test('the quiet window ends after 1 s even if requests keep starting, and the 4 
   for (let i = 0; i < 11; i++) {
     await tick(t, 90);
     worker.started(requestTo(`/api/stream${i}`), `stream${i}`);
+    worker.mocked(requestTo(`/api/stream${i}`), jsonResponse(), `stream${i}`);
   }
   await tick(t, 10);
   worker.started(requestTo('/api/after'), 'after');
@@ -1499,12 +1730,13 @@ test('the quiet window ends after 1 s even if requests keep starting, and the 4 
   t.mock.timers.tick(1);
   const lines = await finished.then(() => [], (error) => error.message.split('\n'));
   assert.equal(lines.length, 12);
-  assert.ok(lines.filter((line) => line !== '').every((line) => /did not finish within 4 s \(GET \/api\/stream\d+\)\.$/.test(line)), lines.join('\n'));
+  assert.ok(lines.filter((line) => line !== '').every((line) => /did not finish within 4 s \(GET \/api\/stream\d+\)\. Increase parameters\.mokapi\.timeout or defaultTimeout\.$/.test(line)), lines.join('\n'));
 });
 
 test('a request that starts in the quiet window times out 4 s after afterEach began', async (t) => {
   underVitest(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  holdMokapi(t);
   const worker = fakeWorker();
   const context = testContext(worker, failingMode);
   validationHook(context, hookOptions(recorder()));
@@ -1512,6 +1744,7 @@ test('a request that starts in the quiet window times out 4 s after afterEach be
   const finished = testHook(context, hookOptions(recorder())).catch(() => { settledAt = 'rejected'; });
   await tick(t, 50);
   worker.started(getProfile(), 'early');
+  worker.mocked(getProfile(), jsonResponse(), 'early');
   await tick(t, 3949);
   assert.equal(settledAt, undefined);
   await tick(t, 1);
@@ -1532,10 +1765,12 @@ test('afterEach returns without a report when the story is torn down during the 
 
 test('a timeout does not stop a story in warning mode', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  holdMokapi(t);
   const worker = fakeWorker();
   const context = testContext(worker);
   validationHook(context, hookOptions(recorder()));
   worker.started(getProfile());
+  worker.mocked(getProfile(), jsonResponse());
   const finished = testHook(context, hookOptions(recorder()));
   t.mock.timers.tick(4000);
   await finished;
@@ -1999,19 +2234,21 @@ test('preview registers an afterEach that fails a story with a contract error in
   assert.equal(warning.context.reports[0].status, 'warning');
 });
 
-test('preset adds the preview annotation and the manager entry after the existing ones', () => {
-  assert.deepEqual(previewAnnotations(['a.js']).map((file) => file.split('/').at(-1)), ['a.js', 'preview.js']);
+// Storybook runs the project's afterEach hooks in reverse order of the annotation files, so the first one runs last.
+test('preset puts the preview annotation before the existing ones and adds the manager entry after them', () => {
+  assert.deepEqual(previewAnnotations(['a.js']).map((file) => file.split('/').at(-1)), ['preview.js', 'a.js']);
   assert.deepEqual(managerEntries().map((file) => file.split('/').at(-1)), ['manager.js']);
 });
 
 test('preset defines the resolved options for the preview and sets up no proxy', () => {
   const config = viteFinal({ server: { port: 6006 } }, { dashboardUrl: 'http://localhost:9090/', defaultValidation: true });
   assert.deepEqual(JSON.parse(config.define.__MOKAPI_STORYBOOK_OPTIONS__), {
-    dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'warning', defaultPartial: false,
+    dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'warning', defaultPartial: false, defaultTimeout: 4000,
   });
   assert.deepEqual(config.server, { port: 6006 });
   assert.equal(JSON.stringify(config).includes('proxy'), false);
   assert.deepEqual(JSON.parse(viteFinal({}).define.__MOKAPI_STORYBOOK_OPTIONS__), resolveOptions());
+  assert.equal(JSON.parse(viteFinal({}, { defaultTimeout: 8000 }).define.__MOKAPI_STORYBOOK_OPTIONS__).defaultTimeout, 8000);
 });
 
 test('preset injects only the dashboard URL and defaultValidation into the manager and escapes markup', () => {
@@ -2244,7 +2481,7 @@ test('a test run result of a partial story shows partial responses and its repor
   assert.equal(runs['a--one'].report.status, 'passed');
   const panel = panelOf(initialPanelState, runs, 'a--one');
   assert.equal(panel.partial, true);
-  assert.deepEqual(reportBadge(panel.testMode, panel.report, panel.entries, panel.partial), { label: 'PARTIAL', status: 'positive' });
+  assert.deepEqual(reportBadge(panel.testMode, panel.report, panel.partial), { label: 'PARTIAL', status: 'positive' });
 });
 
 test('a test run result of a strict story or with a non-true partial shows no partial responses', () => {
@@ -2255,7 +2492,7 @@ test('a test run result of a strict story or with a non-true partial shows no pa
     assert.equal('partial' in runs['a--one'], false);
     const panel = panelOf(initialPanelState, runs, 'a--one');
     assert.equal('partial' in panel, false);
-    assert.deepEqual(reportBadge(panel.testMode, panel.report, panel.entries, panel.partial), { label: 'PASS', status: 'positive' });
+    assert.deepEqual(reportBadge(panel.testMode, panel.report, panel.partial), { label: 'PASS', status: 'positive' });
   }
 });
 

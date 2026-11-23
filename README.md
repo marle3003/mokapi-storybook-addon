@@ -290,7 +290,8 @@ has:
   is the headline of the [error message](#error-message), for example
   `1 response does not match the contract.` For `SKIP` it is
   `No response was checked against the contract.`, or the message about the
-  missing MSW worker if `context.msw` is not set.
+  missing MSW worker if `context.msw` is not set, or the message about a handler
+  that did not answer in time.
 - The counts in one line, for example
   `2 responses validated, 1 valid, 1 invalid`. The line counts all entries since
   the story was mounted and updates as results come in. Kinds that don't occur
@@ -310,9 +311,11 @@ The badge depends on the test mode of the story, see
 | `WARN` | Test mode `'warning'` and a failing result |
 | `PASS` | No failing result and at least one valid response |
 | `PARTIAL` | Like `PASS`, for a story with [partial responses](#partial-responses). Green as well |
-| `SKIP` | No failing result and no valid response: every response is not in the contract, the story sent no request, or the MSW worker is missing |
+| `SKIP` | No failing result and no valid response: every response is not in the contract, the story sent no request, the MSW worker is missing, or a handler did not answer within the [wait limit](#wait-limit) |
 
 `SKIP` is shown in the panel only. Storybook still reports the story as passed.
+The badge follows the report of the story, so a response that arrives after the
+report appears in the list but doesn't change the badge.
 `PARTIAL` changes the badge only: the report status stays `passed`, so the
 sidebar status, Vitest and the **Run tests** widget treat the story as a plain
 pass.
@@ -347,10 +350,17 @@ Notices appear below the toolbar when the addon can't validate:
 - Mokapi reports a configuration error, for example an unknown `api`.
 - `parameters.mokapi.test` has an invalid value.
 - `parameters.mokapi.partial` has an invalid value.
+- `parameters.mokapi.timeout` has an invalid value.
 - The Mokapi at `dashboardUrl` doesn't support partial responses and must be
   updated to 0.60.0. The entries show what Mokapi returned, validated strictly.
-- A validation did not finish in time, see [Failing stories](#failing-stories).
+- Mokapi did not answer in time: MSW answered, but the validation did not finish
+  within the wait limit, see [Failing stories](#failing-stories).
+- The MSW handler did not answer in time. This is not a failure, nothing was
+  validated, see [Wait limit](#wait-limit).
 - The MSW worker is missing from `context.msw`.
+
+Notices that don't fail a story (a missing worker, a handler that did not answer)
+are shown in the warning color, the others in red.
 
 The exact texts are listed in [Errors](#errors). With validation off, the panel
 shows only a hint how to turn it on, without toolbar.
@@ -467,20 +477,63 @@ A failing result is:
 - an invalid response
 - Mokapi is not reachable, or the Mokapi at `dashboardUrl` has no validation endpoint
 - a story with partial responses and a Mokapi older than 0.60.0, which ignores the option
-- a configuration error, for example an unknown `api`, an invalid `parameters.mokapi.test` or an invalid `parameters.mokapi.partial`
-- a validation that did not finish within 4 s
+- a configuration error, for example an unknown `api`, an invalid `parameters.mokapi.test`, `parameters.mokapi.partial` or `parameters.mokapi.timeout`
+- a validation that did not finish within the [wait limit](#wait-limit), although MSW had answered the request
 
 These don't count, they only show in the panel: responses that are not in the
-contract (a project with partial contracts would get a warning on every story)
-and a missing MSW worker. A story without requests passes.
+contract (a project with partial contracts would get a warning on every story),
+a missing MSW worker and a handler that did not answer within the wait limit
+(a loading skeleton delays on purpose). A story without requests passes.
 
 Before it reports, the story waits for the requests that its handlers answer, and
 for their validation. Requests that MSW passes through or that no handler
-matches are dropped, so they don't block the story. The wait is capped at 4 s
-including the short quiet window described in [Limitations](#limitations). If a
-validation is still open then, the story fails with
-`Mokapi validation did not finish within 4 s (GET /api/profile/1).`, one request
-per line if several.
+matches are dropped, so they don't block the story. The wait is capped at 4 s by
+default, including the short quiet window described in
+[Limitations](#limitations). If MSW had answered a request and its validation is
+still open then, the story fails with
+`Mokapi validation did not finish within 4 s (GET /api/profile/1). Increase parameters.mokapi.timeout or defaultTimeout.`,
+one request per line if several.
+
+### Wait limit
+
+Two things can still be open when the limit is reached, and they end differently:
+
+- MSW answered, Mokapi did not validate in time: the story fails, as described
+  above.
+- The handler did not answer in time: nothing was validated and nothing failed.
+  The story passes, the panel shows `SKIP` with the notice
+  `No response from the MSW handler within 4 s (GET /api/profile), not validated. If the response is delayed on purpose, increase parameters.mokapi.timeout or defaultTimeout.`
+
+Change the limit for all stories with `defaultTimeout` and for a story, a
+component or the whole project with `parameters.mokapi.timeout`, both in
+milliseconds:
+
+```ts
+// .storybook/main.ts
+export default {
+  addons: [
+    {
+      name: 'mokapi-storybook-addon',
+      options: {
+        defaultTimeout: 4000, // default
+      },
+    },
+  ],
+};
+```
+
+```ts
+// A story whose handler delays the response on purpose
+export const SlowProfile = {
+  parameters: {
+    mokapi: { timeout: 10000 },
+    msw: { handlers: [/* ... */] },
+  },
+};
+```
+
+The value must be a finite number greater than 0. The notices show it in
+seconds, for example `1.5 s` for `1500`.
 
 ### Sidebar status
 
@@ -693,6 +746,16 @@ export default {
 With this setup a contract error fails the component test in `'error'` mode,
 whatever the toolbar shows.
 
+The wait limit counts inside Vitest's own limit. If you set a large
+`parameters.mokapi.timeout` or `defaultTimeout`, raise `testTimeout` of the
+Vitest project as well (Vitest's default is 5 s), otherwise Vitest ends the test
+first:
+
+```ts
+// vitest.config.ts, in the project with storybookTest
+test: { testTimeout: 20000 },
+```
+
 The addon adds its result with Storybook's reporting API as a report of type
 `mokapi`, with the status `passed`, `warning` or `failed`.
 
@@ -800,6 +863,7 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 | `defaultValidation` | `boolean` | `false`                   | Initial state of the toolbar toggle. `true` starts with validation on and the button highlighted |
 | `defaultTest`       | `'error' \| 'warning' \| 'off'` | `'warning'` | Test mode of all stories, see [Failing stories](#failing-stories) |
 | `defaultPartial`    | `boolean` | `false`                   | Validate the responses of all stories as partial responses, see [Partial responses](#partial-responses). Needs Mokapi 0.60.0 |
+| `defaultTimeout`    | `number`  | `4000`                    | Milliseconds a story waits for its responses and their validation, quiet window included. Must be a finite number greater than 0, see [Wait limit](#wait-limit) |
 
 ### `parameters.mokapi`
 
@@ -809,6 +873,7 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 | `disable` | `boolean` | Sends nothing to Mokapi for this story                                      |
 | `test`    | `'error' \| 'warning' \| 'off'` | Overrides `defaultTest` for this story, see [Failing stories](#failing-stories) |
 | `partial` | `boolean` | Overrides `defaultPartial` for this story, see [Partial responses](#partial-responses) |
+| `timeout` | `number`  | Overrides `defaultTimeout` for this story, in milliseconds, see [Wait limit](#wait-limit) |
 
 ### Global `mokapiValidation`
 
@@ -837,6 +902,7 @@ Invalid options throw an error when Storybook starts:
 - `Mokapi: defaultValidation must be true or false.`
 - `Mokapi: defaultTest must be 'error', 'warning' or 'off'.`
 - `Mokapi: defaultPartial must be true or false.`
+- `Mokapi: defaultTimeout must be a positive number.`
 
 The panel shows these notices. None of them counts in the badge. They don't stop
 the story either, unless the test mode is `'error'` and the notice is a failing
@@ -850,9 +916,11 @@ result, see [Failing stories](#failing-stories):
 | `Mokapi answered HTTP <status>: <message>` | Any other unexpected answer from Mokapi. Mokapi's message is added if it sent one |
 | `Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.` | A story, component or preview sets an invalid test mode. The story uses `defaultTest` |
 | `Mokapi: parameters.mokapi.partial must be true or false.` | A story, component or preview sets a `partial` that isn't a boolean. Counts as a configuration error. The story uses `defaultPartial` |
+| `Mokapi: parameters.mokapi.timeout must be a positive number.` | A story, component or preview sets a `timeout` that isn't a finite number greater than 0. Counts as a configuration error. The story uses `defaultTimeout` |
 | `The Mokapi at <dashboardUrl> doesn't support partial responses and must be updated to 0.60.0.` | A story with partial responses met a Mokapi older than 0.60.0. It ignores the option and validates strictly. Update Mokapi or set `partial: false` |
 | `Mokapi: could not read the mocked request or response: <error message>` | The addon could not copy the mocked request or response, or could not show the result. Nothing was validated for that request. The error message tells why |
-| `Mokapi validation did not finish within 4 s (<method> <path>).` | MSW or Mokapi did not answer in time. One notice per unfinished request |
+| `Mokapi validation did not finish within <s> s (<method> <path>). Increase parameters.mokapi.timeout or defaultTimeout.` | MSW answered, but Mokapi did not answer in time. Failing result. One notice per unfinished request. Increase the limit or check that Mokapi is responsive |
+| `No response from the MSW handler within <s> s (<method> <path>), not validated. If the response is delayed on purpose, increase parameters.mokapi.timeout or defaultTimeout.` | The handler did not answer within the limit. Not a failing result. Increase the limit if the delay is intended |
 | ``MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.`` | The story has no MSW worker. Use `mswLoader` or set `context.msw` in your own loader |
 
 In test mode `'error'`, the story fails with the message described in
@@ -872,10 +940,20 @@ validation off, a story without a worker runs without any message.
 - The test mode waits until no new request has started for 100 ms (at most 1 s),
   then for the requests that started before. A request that starts later, for
   example from polling or a timer, is not counted. It still appears in the panel.
-- The wait for validations is a fixed 4 s and includes that quiet window. You can't
-  configure it.
-- Opaque responses emit no MSW event, so a request that gets one only ends by the
-  4 s timeout.
+- The wait limit (4 s by default, see [Wait limit](#wait-limit)) includes that
+  quiet window. A limit below the quiet window still waits for it.
+- Opaque responses emit no MSW event, so a request that gets one only ends at the
+  limit, as a `handler-timeout` notice that doesn't fail the story.
+- A story with a loading skeleton, whose handler never answers, waits the whole
+  limit before it ends as `SKIP`. Set `disable: true` or a small `timeout` for it.
+- A response that MSW delays beyond the limit isn't validated, so an invalid
+  response stays green. Raise `timeout` for such a story.
+- A response that arrives after the report appears in the panel, but doesn't
+  change the badge, the headline or the report.
+- The Mokapi `afterEach` runs after the `afterEach` hooks of other addons and
+  after the one in your own `.storybook/preview.ts`, because the addon puts its
+  preview annotations first. Another addon that does the same can still run
+  after it.
 - A test run result of a story in `'error'` mode has no entries, because
   addon-vitest keeps the reports of failed stories out of its results. The panel
   shows the badge and the headline only.

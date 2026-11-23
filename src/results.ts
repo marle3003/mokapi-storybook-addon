@@ -30,7 +30,7 @@ export interface Entry {
 }
 
 export interface Notice {
-  kind: 'unreachable' | 'endpoint-missing' | 'config-error' | 'timeout' | 'worker-missing' | 'partial-unsupported';
+  kind: 'unreachable' | 'endpoint-missing' | 'config-error' | 'timeout' | 'handler-timeout' | 'worker-missing' | 'partial-unsupported';
   message: string;
 }
 

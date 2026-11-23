@@ -11,6 +11,11 @@ export interface MokapiAddonOptions {
    * body, but still checks everything the body contains. `parameters.mokapi.partial` overrides it. Default `false`.
    */
   defaultPartial?: boolean;
+  /**
+   * Milliseconds the Mokapi afterEach waits for the responses of a story and their validation, the quiet window
+   * included. `parameters.mokapi.timeout` overrides it. Default `4000`.
+   */
+  defaultTimeout?: number;
 }
 
 export type ResolvedAddonOptions = Required<MokapiAddonOptions>;
@@ -27,4 +32,6 @@ export interface MokapiStoryParameters {
   test?: TestMode;
   /** Overrides `defaultPartial` for this story. */
   partial?: boolean;
+  /** Overrides `defaultTimeout` for this story, in milliseconds. */
+  timeout?: number;
 }

@@ -16,6 +16,7 @@ import {
   countLine,
   formatBody,
   formatTime,
+  isFailingNotice,
   KIND_LABELS,
   methodColor,
   PARTIAL_TEXT,
@@ -243,7 +244,7 @@ const ToolbarActions = styled.div({ display: 'flex', alignItems: 'center', gap: 
 const NoticeRow = styled.div<{ kind: Notice['kind'] }>(({ theme, kind }) => ({
   padding: '8px 15px',
   borderBottom: `1px solid ${theme.appBorderColor}`,
-  color: kind === 'worker-missing' ? theme.color.warning : theme.color.negative,
+  color: isFailingNotice(kind) ? theme.color.negative : theme.color.warning,
 }));
 const EmptyText = styled.p({ margin: 0, padding: '8px 15px' });
 const TestRunNote = styled(EmptyText)(({ theme }) => ({ color: theme.textMutedColor }));
@@ -405,7 +406,7 @@ function RerunButton() {
 
 function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: string }) {
   const { entries, testMode, report, partial } = state;
-  const badge = reportBadge(testMode, report, entries, partial);
+  const badge = reportBadge(testMode, report, partial);
   const headline = reportHeadline(report, state);
   const counts = countLine(entries);
   return (

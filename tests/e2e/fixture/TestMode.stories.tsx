@@ -100,6 +100,39 @@ export const ErrorNeverAnswers = {
   },
 };
 
+// A loading skeleton story: the handler is held on purpose, so the limit (`timeout`) ends the wait.
+export const ErrorShortTimeout = {
+  parameters: {
+    mokapi: { test: 'error', timeout: 1500 },
+    msw: {
+      handlers: [http.get('/api/profile', async () => {
+        await delay('infinite');
+        return HttpResponse.json(jane);
+      })],
+    },
+  },
+};
+
+// The handler is slower than the default limit of 4 s, `timeout` raises it. The response is invalid, so the
+// story fails with the contract error and not with a timeout.
+export const ErrorSlowHandler = {
+  parameters: {
+    mokapi: { test: 'error', timeout: 10000 },
+    msw: {
+      handlers: [http.get('/api/profile', async () => {
+        await delay(6000);
+        return HttpResponse.json(invalidProfile);
+      })],
+    },
+  },
+};
+
+// The response arrives at once. The scenario holds Mokapi's answer back, so the limit is reached with a response
+// that MSW delivered and Mokapi has not judged.
+export const ErrorMokapiTooSlow = {
+  parameters: { mokapi: { test: 'error', timeout: 1500 }, msw: { handlers: [profileHandler(jane)] } },
+};
+
 // One request is passed through by a handler, the other has no handler at all.
 export const ErrorBypass = {
   render: () => (
@@ -120,6 +153,10 @@ export const ErrorHandlerThrows = {
 
 export const InvalidTestParameter = {
   parameters: { mokapi: { test: 'strict' }, msw: { handlers: [profileHandler(jane)] } },
+};
+
+export const InvalidTimeoutParameter = {
+  parameters: { mokapi: { timeout: 'long' }, msw: { handlers: [profileHandler(jane)] } },
 };
 
 export const ErrorDisabled = {

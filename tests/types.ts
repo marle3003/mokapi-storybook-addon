@@ -11,6 +11,8 @@ const testMode: TestMode = 'off';
 void testMode;
 const partialOptions: MokapiAddonOptions = { defaultPartial: true };
 void partialOptions;
+const timeoutOptions: MokapiAddonOptions = { defaultTimeout: 8000 };
+void timeoutOptions;
 const defaultOptions: MokapiAddonOptions = {};
 void defaultOptions;
 
@@ -22,6 +24,8 @@ const withTest: Parameters = { mokapi: { test: 'warning' } };
 void withTest;
 const withPartial: Parameters = { mokapi: { partial: true } };
 void withPartial;
+const withTimeout: Parameters = { mokapi: { timeout: 10000 } };
+void withTimeout;
 const empty: Parameters = { mokapi: {} };
 void empty;
 
@@ -64,3 +68,9 @@ void stringDefaultPartial;
 // @ts-expect-error partial is a boolean.
 const stringPartial: Parameters = { mokapi: { partial: 'yes' } };
 void stringPartial;
+// @ts-expect-error defaultTimeout is a number of milliseconds.
+const stringDefaultTimeout: MokapiAddonOptions = { defaultTimeout: '4000' };
+void stringDefaultTimeout;
+// @ts-expect-error timeout is a number of milliseconds.
+const stringTimeout: Parameters = { mokapi: { timeout: '10000' } };
+void stringTimeout;

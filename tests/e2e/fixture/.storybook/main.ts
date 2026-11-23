@@ -10,6 +10,8 @@ export default {
   ],
   addons: [
     '@storybook/addon-docs',
+    // Two stand-ins for other addons, one listed before and one after the Mokapi addon (see Profile.stories.tsx, AfterEachOrder).
+    './order-before/preset.js',
     ...(screenshot ? [] : ['@storybook/addon-vitest']),
     {
       name: 'mokapi-storybook-addon',
@@ -19,5 +21,6 @@ export default {
         defaultTest: process.env.MOKAPI_DEFAULT_TEST,
       },
     },
+    './order-after/preset.js',
   ],
 };

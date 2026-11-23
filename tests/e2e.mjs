@@ -317,6 +317,7 @@ const responseBadge = (entry) => entryDetails(entry).getByTestId('mokapi-status-
 const entryMethodBadge = (entry) => entry.getByTestId('mokapi-method-badge').first();
 const requestBadge = (entry) => entryDetails(entry).getByTestId('mokapi-method-badge');
 const fontFamilyOf = (locator) => locator.evaluate((element) => getComputedStyle(element).fontFamily);
+const colorOf = (locator) => locator.evaluate((element) => getComputedStyle(element).color);
 const backgroundColorOf = (locator) => locator.evaluate((element) => getComputedStyle(element).backgroundColor);
 const entryTime = (entry) => entry.getByTestId('mokapi-entry-time');
 const EMPTY_LIST_TEXT = 'No responses validated since this story was mounted.';
@@ -436,7 +437,7 @@ async function runStoriesWithVitest(env, outputFile, storyNames) {
   const cli = join(dirname(require.resolve('vitest/package.json')), 'vitest.mjs');
   const pattern = storyNames.map((name) => name.replace(/(?<=.)([A-Z])/g, ' $1')).join('|');
   const child = spawn(process.execPath, [
-    cli, 'run', 'TestMode.stories', '--reporter=json', `--outputFile=${outputFile}`, '--testNamePattern', pattern,
+    cli, 'run', 'TestMode.stories', 'Profile.stories', '--reporter=json', `--outputFile=${outputFile}`, '--testNamePattern', pattern,
   ], { cwd: fixtureDirectory, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk) => { output += chunk; });
@@ -1679,11 +1680,48 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertStoryFails(page, /1 response does not match the contract\./);
     });
 
-    await scenario('with test error a response that never comes fails the story after 4 s with a timeout notice', async (page) => {
-      await openValidated(page, 'profile--error-never-answers');
-      await showsText(reportBadge(page), 'WAIT');
-      await assertStoryFails(page, /Mokapi validation did not finish within 4 s \(GET \/api\/profile\)\./);
-      await notice(page, /Mokapi validation did not finish within 4 s \(GET \/api\/profile\)\./).waitFor();
+    // The handler never answers, so nothing is validated: the story is skipped, not a contract failure.
+    const handlerTimeout = (seconds) => `No response from the MSW handler within ${seconds} s (GET /api/profile), not validated. If the response is delayed on purpose, increase parameters.mokapi.timeout or defaultTimeout.`;
+    // theme.color.warning of the light theme
+    const WARNING_COLOR = 'rgb(230, 157, 0)';
+
+    for (const [id, seconds] of [['profile--error-never-answers', 4], ['profile--error-short-timeout', 1.5]]) {
+      await scenario(`with test error a response that never comes is skipped after ${seconds} s with a notice that names the handler`, async (page) => {
+        await openValidated(page, id);
+        await showsText(reportBadge(page), 'WAIT');
+        await showsText(reportBadge(page), 'SKIP');
+        await showsText(reportHeadline(page), handlerTimeout(seconds));
+        const handlerNotice = notice(page, handlerTimeout(seconds));
+        await handlerNotice.waitFor();
+        assert.equal(await colorOf(handlerNotice), WARNING_COLOR);
+        const finished = await assertStoryStaysGreen(page);
+        assert.deepEqual(mokapiReports(finished).map(({ status }) => status), ['passed']);
+        await assertNoSidebarStatus(page, id);
+      });
+    }
+
+    await scenario('with test error a handler that is slower than the default limit but within `timeout` is validated', async (page) => {
+      await openValidated(page, 'profile--error-slow-handler');
+      await assertStoryFails(page, /^1 response does not match the contract\.$/);
+      assert.equal(await notice(page, /did not finish|No response from the MSW handler/).count(), 0);
+    });
+
+    await scenario('with test error a response MSW delivered but Mokapi did not judge in time fails the story with a timeout notice', async (page, context) => {
+      // Mokapi's answer never comes: the route is neither fulfilled nor continued.
+      await context.route(`${dashboard}${VALIDATE_PATH}`, () => {});
+      await openValidated(page, 'profile--error-mokapi-too-slow');
+      const message = 'Mokapi validation did not finish within 1.5 s (GET /api/profile). Increase parameters.mokapi.timeout or defaultTimeout.';
+      await assertStoryFails(page, new RegExp(escapeRegExp(message)));
+      const failingNotice = notice(page, message);
+      await failingNotice.waitFor();
+      assert.equal(await colorOf(failingNotice), 'rgb(255, 68, 0)');
+    });
+
+    await scenario('an invalid timeout parameter shows a configuration notice and the story uses the default limit', async (page) => {
+      await openValidated(page, 'profile--invalid-timeout-parameter');
+      await notice(page, 'Mokapi: parameters.mokapi.timeout must be a positive number.').waitFor();
+      await showsText(reportBadge(page), 'WARN');
+      await entries(page, 'valid').waitFor();
     });
 
     for (const id of ['profile--error-valid', 'profile--error-no-worker', 'profile--error-no-request', 'profile--error-bypass', 'profile--error-handler-throws']) {
@@ -1692,6 +1730,14 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
         await assertStoryStaysGreen(page);
       });
     }
+
+    // The stand-in addons throw when the Mokapi report exists at their afterEach, so a green story means they ran first.
+    await scenario('the Mokapi afterEach runs after the afterEach of addons listed before and after it', async (page) => {
+      await openValidated(page, 'profile--after-each-order');
+      await entries(page, 'valid').waitFor();
+      const finished = await assertStoryStaysGreen(page);
+      assert.equal(mokapiReports(finished).length, 1);
+    });
 
     await scenario('with test error a disabled story and validation off never fail', async (page) => {
       await openValidated(page, 'profile--error-disabled');
@@ -1757,7 +1803,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     });
 
     await t.test('Vitest fails stories with contract errors', { timeout: 180000 }, async () => {
-      const storyNames = ['ErrorInvalid', 'ErrorNeverAnswers', 'ErrorValid', 'WarningInvalid', 'OffInvalid'];
+      const storyNames = ['ErrorInvalid', 'ErrorNeverAnswers', 'ErrorValid', 'WarningInvalid', 'OffInvalid', 'AfterEachOrder'];
       const story = await runStoriesWithVitest(
         { MOKAPI_DASHBOARD: dashboard, MOKAPI_DEFAULT_VALIDATION: 'true' },
         join(directory, 'vitest.json'),
@@ -1766,10 +1812,9 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const failures = (name) => story(name).failureMessages.join('\n');
       story('ErrorInvalid').expect('failed');
       assert.match(failures('ErrorInvalid'), /MokapiContractError: Mokapi contract validation failed: 1 response does not match the contract\./);
-      // Vitest's own timeout would say "Test timed out", so this shows the addon's limit fits into the default.
-      story('ErrorNeverAnswers').expect('failed');
-      assert.match(failures('ErrorNeverAnswers'), /Mokapi validation did not finish within 4 s \(GET \/api\/profile\)\./);
-      for (const name of ['ErrorValid', 'WarningInvalid', 'OffInvalid']) story(name).expect('passed');
+      // A response that never comes is skipped. Vitest's own timeout would say "Test timed out", so this also shows
+      // that the addon's limit (4 s) fits into the default.
+      for (const name of ['ErrorNeverAnswers', 'ErrorValid', 'WarningInvalid', 'OffInvalid', 'AfterEachOrder']) story(name).expect('passed');
     });
 
     await scenario('defaultTest error fails a story without its own test parameter', async (page) => {
