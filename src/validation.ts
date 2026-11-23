@@ -67,10 +67,13 @@ export async function serializePair(request: Request, response: Response, api?: 
 
 // text/plain keeps this a CORS simple request, so no preflight is sent. Mokapi decodes the body as
 // JSON anyway, and a Mokapi without the endpoint still answers with a readable 405.
+// `Accept: msw/passthrough` is the marker of MSW's own bypass(): the project's worker passes the request on
+// without calling onUnhandledRequest, and the service worker strips the value. Accept is safelisted, so the
+// request stays a simple one.
 export function sendValidation(dashboardUrl: string, payload: ValidationPayload): Promise<Response> {
   return fetch(`${dashboardUrl}${VALIDATE_PATH}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+    headers: { 'Content-Type': 'text/plain;charset=UTF-8', Accept: 'msw/passthrough' },
     body: JSON.stringify(payload),
   });
 }

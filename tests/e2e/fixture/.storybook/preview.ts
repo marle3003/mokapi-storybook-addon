@@ -6,7 +6,7 @@ export default {
   initialGlobals: { theme: 'light' },
   loaders: [mswLoader(async () => {
     const worker = setupWorker();
-    await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
+    await worker.start({ onUnhandledRequest: 'error', quiet: true });
     return worker;
   })],
   parameters: {

@@ -265,7 +265,7 @@ test('classification reports a failed request as Mokapi not reachable with the U
   assert.match(outcome.message, /Mokapi is not reachable at http:\/\/localhost:8080\. Check the dashboardUrl option/);
 });
 
-test('sending posts the JSON payload as a CORS simple request to the validate endpoint', async (t) => {
+test('sending posts the JSON payload as a CORS simple request that MSW passes through to the validate endpoint', async (t) => {
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
   const payload = { request: { method: 'GET', url: '/api/profile' }, response: { statusCode: 200 } };
   const response = await sendValidation(dashboardUrl, payload);
@@ -273,7 +273,7 @@ test('sending posts the JSON payload as a CORS simple request to the validate en
   const [url, init] = fetch.mock.calls[0].arguments;
   assert.equal(url, 'http://localhost:8080/api/services/http/validate');
   assert.equal(init.method, 'POST');
-  assert.deepEqual(init.headers, { 'Content-Type': 'text/plain;charset=UTF-8' });
+  assert.deepEqual(init.headers, { 'Content-Type': 'text/plain;charset=UTF-8', Accept: 'msw/passthrough' });
   assert.deepEqual(JSON.parse(init.body), payload);
 });
 

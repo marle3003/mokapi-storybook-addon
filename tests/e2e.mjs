@@ -530,6 +530,10 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     // Each scenario runs in a fresh browser context, so that no state leaks between them.
     // Its own timeout makes a hanging scenario fail by name instead of using up the budget of the whole test.
+    // MSW names the request in the same console message, with the line breaks of its own format.
+    // A missing `Accept: msw/passthrough` marker shows up here, whatever onUnhandledRequest is set to.
+    const isUnhandledValidationRequest = (line) =>
+      line.includes('[MSW]') && line.includes('intercepted a request without a matching request handler') && line.includes(VALIDATE_PATH);
     const scenario = (name, run, contextOptions = {}) => t.test(name, { timeout: 60000 }, async () => {
       const context = await browser.newContext({ viewport: { width: 1280, height: 1600 }, locale: 'en-US', ...contextOptions });
       await recordFinishedStories(context);
@@ -546,6 +550,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       });
       try {
         await run(page, context);
+        const unhandled = consoleLines.find(isUnhandledValidationRequest);
+        if (unhandled) throw new Error(`MSW treated the addon's validation request as unhandled: ${unhandled}`);
       } catch (error) {
         // A failed subtest doesn't reject into the outer test, so it marks the test as failed itself.
         testFailed = true;
