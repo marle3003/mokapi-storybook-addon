@@ -1,5 +1,7 @@
-// Takes docs/screenshot.png for the README: the Invalid story of the e2e fixture with validation
-// on and the Mokapi panel showing the validation error. Needs a fresh `npm run build`.
+// Takes a screenshot of a story of the e2e fixture with validation on and the Mokapi panel open.
+// Needs a fresh `npm run build`. The shot is the first argument, `npm run screenshot -- partial`:
+// - invalid (default): docs/screenshot.png for the README, the Invalid story with the validation error
+// - partial: docs/screenshot-partial.png, the Partial story with the PARTIAL badge and the toolbar line
 // MOKAPI_BIN overrides the go-mokapi binary, e.g. for a local Mokapi build.
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -13,7 +15,25 @@ import { chromium } from 'playwright';
 
 const require = createRequire(import.meta.url);
 const fixtureDirectory = fileURLToPath(new URL('../tests/e2e/fixture/', import.meta.url));
-const screenshotFile = fileURLToPath(new URL('../docs/screenshot.png', import.meta.url));
+const docsFile = (name) => fileURLToPath(new URL(`../docs/${name}`, import.meta.url));
+
+// Each shot opens a story and waits until the panel shows what the image is about.
+const shots = {
+  invalid: {
+    storyId: 'profile--invalid',
+    file: docsFile('screenshot.png'),
+    shown: (page) => page.locator('[data-testid="mokapi-entry"][data-status="invalid"]').first(),
+  },
+  partial: {
+    storyId: 'profile--partial',
+    file: docsFile('screenshot-partial.png'),
+    // The badge turns to PARTIAL with the report, after the story has rendered.
+    shown: (page) => page.getByTestId('mokapi-report-badge').filter({ hasText: 'PARTIAL' }),
+  },
+};
+const shotName = process.argv[2] ?? 'invalid';
+const shot = shots[shotName];
+if (!shot) throw new Error(`Unknown screenshot "${shotName}", use one of: ${Object.keys(shots).join(', ')}`);
 
 async function unusedPorts(count) {
   const servers = Array.from({ length: count }, () => createServer());
@@ -98,15 +118,15 @@ providers:
   await warmUp.close();
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2, locale: 'en-US' });
-  await page.goto(`${storybook}/?path=/story/profile--invalid`);
+  await page.goto(`${storybook}/?path=/story/${shot.storyId}`);
   await page.getByRole('tab', { name: /^Mokapi/ }).click();
-  await page.locator('[data-testid="mokapi-entry"][data-status="invalid"]').first().waitFor({ timeout: 30000 });
+  await shot.shown(page).waitFor({ timeout: 30000 });
   // Storybook's "What's new" notification would cover the sidebar.
   const dismiss = page.getByRole('button', { name: 'Dismiss notification' });
   while (await dismiss.count() > 0) await dismiss.first().click();
   await setTimeout(500);
-  await page.screenshot({ path: screenshotFile });
-  console.log(`Saved ${screenshotFile}`);
+  await page.screenshot({ path: shot.file });
+  console.log(`Saved ${shot.file}`);
 } finally {
   for (const stop of stops.reverse()) {
     try { await stop(); } catch { /* already stopped */ }
