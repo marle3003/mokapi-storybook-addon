@@ -2042,6 +2042,17 @@ test('core can be imported without MSW, which the package neither bundles nor re
   assert.deepEqual(sources.filter((source) => /from ['"]msw/.test(source)), []);
 });
 
+test('root preset.js re-exports the built preset and is published, as the Storybook integration catalog requires', async () => {
+  const [root, built, packageJson] = await Promise.all([
+    import('../preset.js'),
+    import('../dist/preset.js'),
+    readFile(new URL('../package.json', import.meta.url), 'utf8').then(JSON.parse),
+  ]);
+  assert.deepEqual(Object.keys(root), Object.keys(built));
+  assert.equal(root.managerHead, built.managerHead);
+  assert.ok(packageJson.files.includes('preset.js'));
+});
+
 test('React is no peer dependency, because the manager bundle gets it from Storybook', async () => {
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(packageJson.peerDependencies.react, undefined);

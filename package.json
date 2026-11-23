@@ -67,7 +67,7 @@
     "./preset": { "types": "./dist/preset.d.ts", "import": "./dist/preset.js", "default": "./dist/preset.js" },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "preset.js", "README.md", "LICENSE"],
   "peerDependencies": {
     "storybook": "^10.6.7",
     "vite": ">=6"
