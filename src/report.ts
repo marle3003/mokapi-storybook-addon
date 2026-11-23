@@ -20,6 +20,7 @@ export function operationUrl(dashboardUrl: string, { api, method, path }: Operat
 }
 
 export const INVALID_TEST_PARAMETER_MESSAGE = "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.";
+export const INVALID_PARTIAL_PARAMETER_MESSAGE = 'Mokapi: parameters.mokapi.partial must be true or false.';
 
 // `request` is the method and path with query, e.g. `GET /api/profile/1`.
 export const timeoutMessage = (request: string): string =>
@@ -31,6 +32,12 @@ export function resolveTestMode(parameter: unknown, defaultTest: TestMode): { mo
   return isTestMode(parameter) ? { mode: parameter, invalid: false } : { mode: defaultTest, invalid: true };
 }
 
+// An invalid value falls back to the project default; the caller reports it as configuration error.
+export function resolvePartial(parameter: unknown, defaultPartial: boolean): { partial: boolean; invalid: boolean } {
+  if (parameter === undefined) return { partial: defaultPartial, invalid: false };
+  return typeof parameter === 'boolean' ? { partial: parameter, invalid: false } : { partial: defaultPartial, invalid: true };
+}
+
 const TEST_MODE_TEXTS: Record<TestMode, string> = {
   error: 'Test mode: error. Contract errors make this story fail.',
   warning: 'Test mode: warning. Contract errors are reported as warnings, the story stays green.',
@@ -39,9 +46,12 @@ const TEST_MODE_TEXTS: Record<TestMode, string> = {
 
 export const testModeText = (mode: TestMode): string => TEST_MODE_TEXTS[mode];
 
+// A PASS of a partial story doesn't mean the mock is complete, so the panel says so.
+export const PARTIAL_TEXT = 'Partial responses: missing properties are not checked.';
+
 // Not in contract and a missing worker are shown in the panel only: a project with partial contracts
 // would get a warning on every story otherwise.
-const FAILING_NOTICES: readonly Notice['kind'][] = ['unreachable', 'endpoint-missing', 'config-error', 'timeout'];
+const FAILING_NOTICES: readonly Notice['kind'][] = ['unreachable', 'endpoint-missing', 'config-error', 'timeout', 'partial-unsupported'];
 
 type Results = Pick<PanelState, 'entries' | 'notices'>;
 
@@ -112,7 +122,7 @@ export function reportHeadline(report: Report | undefined, { entries, notices }:
 
 // The names are Storybook's theme colors, as the Interactions panel's status badge uses them.
 export interface ReportBadge {
-  label: 'PASS' | 'WARN' | 'FAIL' | 'WAIT' | 'SKIP';
+  label: 'PASS' | 'PARTIAL' | 'WARN' | 'FAIL' | 'WAIT' | 'SKIP';
   status: 'positive' | 'warning' | 'negative' | 'mediumdark';
 }
 
@@ -122,11 +132,15 @@ const REPORT_BADGES: Record<ReportStatus, ReportBadge> = {
   failed: { label: 'FAIL', status: 'negative' },
 };
 
+const PARTIAL_BADGE: ReportBadge = { label: 'PARTIAL', status: 'positive' };
+
 // `testMode` is set while validation is on: until the report exists the story is still validating.
-export function reportBadge(testMode: TestMode | undefined, report: Report | undefined, entries: Entry[]): ReportBadge | undefined {
+// A passed partial story is PARTIAL instead of PASS; its report status stays passed.
+export function reportBadge(testMode: TestMode | undefined, report: Report | undefined, entries: Entry[], partial = false): ReportBadge | undefined {
   if (testMode === undefined || testMode === 'off') return undefined;
   if (report === undefined) return { label: 'WAIT', status: 'mediumdark' };
-  return isSkipped(report, entries) ? { label: 'SKIP', status: 'mediumdark' } : REPORT_BADGES[report.status];
+  if (isSkipped(report, entries)) return { label: 'SKIP', status: 'mediumdark' };
+  return partial && report.status === 'passed' ? PARTIAL_BADGE : REPORT_BADGES[report.status];
 }
 
 // The names are Storybook's theme colors, used by the status and the method badge.

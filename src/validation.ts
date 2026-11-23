@@ -1,8 +1,10 @@
 const VALIDATE_PATH = '/api/services/http/validate';
 const MINIMUM_MOKAPI_VERSION = '0.58.0';
+const PARTIAL_MINIMUM_MOKAPI_VERSION = '0.60.0';
 
 export interface ValidationPayload {
   api?: string;
+  partialResponse?: true;
   request: { method: string; url: string; headers: Record<string, string>; body: string };
   response: { statusCode: number; headers: Record<string, string>; body: string };
 }
@@ -21,10 +23,14 @@ export interface Operation {
 }
 
 // Results carry Mokapi's errors, the other outcomes a notice message for the panel.
+// A result of a partial request that lacks the echo of `partialResponse` carries the notice text: that Mokapi
+// ignored the option.
 export type ValidationOutcome =
-  | { status: 'valid' | 'invalid'; errors: ValidationError[]; operation?: Operation }
-  | { status: 'not-in-contract'; errors: ValidationError[] }
+  | { status: 'valid' | 'invalid'; errors: ValidationError[]; operation?: Operation; partialUnsupportedMessage?: string }
+  | { status: 'not-in-contract'; errors: ValidationError[]; partialUnsupportedMessage?: string }
   | { status: 'unreachable' | 'endpoint-missing' | 'config-error'; message: string };
+
+type ResultOutcome = Extract<ValidationOutcome, { errors: ValidationError[] }>;
 
 export const unreadableMessage = (error: unknown): string =>
   `Mokapi: could not read the mocked request or response: ${error instanceof Error ? error.message : String(error)}`;
@@ -39,11 +45,12 @@ async function readText(message: Request | Response): Promise<string> {
 }
 
 // The origin is left out: Mokapi finds the operation from method and path like for a real request.
-export async function serializePair(request: Request, response: Response, api?: string): Promise<ValidationPayload> {
+export async function serializePair(request: Request, response: Response, api?: string, partial = false): Promise<ValidationPayload> {
   const { pathname, search } = new URL(request.url);
   const [requestBody, responseBody] = await Promise.all([readText(request), readText(response)]);
   return {
     ...(api !== undefined && { api }),
+    ...(partial && { partialResponse: true as const }),
     request: {
       method: request.method,
       url: `${pathname}${search}`,
@@ -80,12 +87,21 @@ const messageOf = (body: unknown): string | undefined =>
   typeof (body as { message?: unknown })?.message === 'string' ? (body as { message: string }).message : undefined;
 
 // Mokapi reports an operation it cannot find (or cannot choose) as the error with location "operation".
-function classifyResult(errors: ValidationError[], operation?: Operation): ValidationOutcome {
+function classifyResult(errors: ValidationError[], operation?: Operation): ResultOutcome {
   if (errors.length > 0 && errors[0].location === 'operation') return { status: 'not-in-contract', errors };
   return { status: errors.length === 0 ? 'valid' : 'invalid', errors, ...(operation && { operation }) };
 }
 
-export async function classify(dashboardUrl: string, answer: Response | unknown): Promise<ValidationOutcome> {
+// Mokapi echoes `partialResponse: true` when it applied the option; an older Mokapi ignores it silently.
+function withPartialCheck(outcome: ResultOutcome, body: unknown, dashboardUrl: string): ResultOutcome {
+  if ((body as { partialResponse?: unknown }).partialResponse === true) return outcome;
+  return {
+    ...outcome,
+    partialUnsupportedMessage: `The Mokapi at ${dashboardUrl} doesn't support partial responses and must be updated to ${PARTIAL_MINIMUM_MOKAPI_VERSION}.`,
+  };
+}
+
+export async function classify(dashboardUrl: string, answer: Response | unknown, partialRequested = false): Promise<ValidationOutcome> {
   if (!(answer instanceof Response)) {
     return {
       status: 'unreachable',
@@ -98,9 +114,9 @@ export async function classify(dashboardUrl: string, answer: Response | unknown)
     message: `Mokapi at ${dashboardUrl} does not support ${VALIDATE_PATH}. Update Mokapi to ${MINIMUM_MOKAPI_VERSION}.`,
   };
   if (answer.ok) {
-    return Array.isArray((body as { errors?: unknown })?.errors)
-      ? classifyResult((body as { errors: ValidationError[] }).errors, (body as { operation?: Operation }).operation)
-      : endpointMissing;
+    if (!Array.isArray((body as { errors?: unknown })?.errors)) return endpointMissing;
+    const outcome = classifyResult((body as { errors: ValidationError[] }).errors, (body as { operation?: Operation }).operation);
+    return partialRequested ? withPartialCheck(outcome, body, dashboardUrl) : outcome;
   }
   const message = messageOf(body);
   // A 404 with Mokapi's JSON message names an unknown API, without it the endpoint does not exist.

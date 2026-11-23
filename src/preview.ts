@@ -17,6 +17,7 @@ const hookOptions = (): HookOptions => ({
   emit: (action: PanelAction) => addons.getChannel().emit(PANEL_EVENT, action),
   dashboardUrl: options.dashboardUrl,
   defaultTest: options.defaultTest,
+  defaultPartial: options.defaultPartial,
 });
 
 // Storybook runs beforeEach after all loaders, so `context.msw` is set by then.

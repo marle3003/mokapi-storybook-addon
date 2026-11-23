@@ -1,17 +1,19 @@
 import {
   errorMessage,
   headline,
+  INVALID_PARTIAL_PARAMETER_MESSAGE,
   INVALID_TEST_PARAMETER_MESSAGE,
   operationUrl,
   QUIET_WINDOW_MAX_MS,
   QUIET_WINDOW_MS,
   reportStatus,
+  resolvePartial,
   resolveTestMode,
   timeoutMessage,
   truncateBody,
   VALIDATION_TIMEOUT_MS,
 } from './report.js';
-import { initialPanelState, invalidCount, reducePanel, validCount, type Entry, type MessageDetails, type PanelAction, type PanelState } from './results.js';
+import { initialPanelState, invalidCount, reducePanel, validCount, type Entry, type MessageDetails, type Notice, type PanelAction, type PanelState } from './results.js';
 import type { MokapiStoryParameters, TestMode } from './types.js';
 import { classify, sendValidation, serializePair, unreadableMessage, type ValidationOutcome, type ValidationPayload } from './validation.js';
 
@@ -37,7 +39,7 @@ interface MswWorker {
 export interface HookContext {
   id: string;
   globals: Record<string, unknown>;
-  parameters: { mokapi?: Omit<MokapiStoryParameters, 'test'> & { test?: unknown } };
+  parameters: { mokapi?: Omit<MokapiStoryParameters, 'test' | 'partial'> & { test?: unknown; partial?: unknown } };
   msw?: unknown;
   /** One per mount: Storybook keeps it for the re-renders of a mount and creates a new one for every mount. */
   abortSignal?: AbortSignal;
@@ -53,6 +55,7 @@ export interface HookOptions {
   emit: (action: PanelAction) => void;
   dashboardUrl: string;
   defaultTest: TestMode;
+  defaultPartial: boolean;
 }
 
 // A request that MSW started and that Mokapi has not validated yet, which afterEach waits for.
@@ -67,6 +70,8 @@ interface InFlight {
 interface Render {
   renderId: number;
   api?: string;
+  /** Mokapi validates the responses of this render with partial responses (only while validating). */
+  partial: boolean;
   /** Validation is on for this story (also without a worker, which is then reported in the panel). */
   validating: boolean;
   /** Requests are sent to Mokapi, i.e. validating and a worker to listen to. */
@@ -81,7 +86,7 @@ interface Render {
 
 // The listener lives as long as the worker, the story changes with every render: each hook run
 // replaces this slot and the listener reads it.
-let current: Render = newRender(0, { validating: false, sending: false, mode: 'off' });
+let current: Render = newRender(0, { partial: false, validating: false, sending: false, mode: 'off' });
 // A component may fetch again after a render, so the response can arrive when the next render has
 // already started. The request belongs to the render that was current when it started.
 const startedIn = new Map<string, Render>();
@@ -97,8 +102,8 @@ let renderCount = 0;
 let capturedCount = 0;
 const observedWorkers = new WeakSet<object>();
 
-function newRender(renderId: number, { api, validating, sending, mode }: Pick<Render, 'api' | 'validating' | 'sending' | 'mode'>): Render {
-  return { renderId, api, validating, sending, mode, state: initialPanelState, inFlight: new Map() };
+function newRender(renderId: number, { api, partial, validating, sending, mode }: Pick<Render, 'api' | 'partial' | 'validating' | 'sending' | 'mode'>): Render {
+  return { renderId, api, partial, validating, sending, mode, state: initialPanelState, inFlight: new Map() };
 }
 
 const isWorker = (msw: unknown): msw is MswWorker =>
@@ -148,22 +153,24 @@ function onUnhandledException(started: StartedRequest): void {
   thrownRequests.add(started.requestId);
 }
 
-// A Mokapi that cannot be reached is listed per request and, once, as notice.
+// A Mokapi that cannot be reached is listed per request and, once, as notice. So is a Mokapi that ignored the
+// partial option: the entry is shown as Mokapi returned it.
 function toPanelActions(
   outcome: ValidationOutcome,
   renderId: number,
   request: Omit<Entry, 'status' | 'errors'>,
   dashboardUrl: string,
 ): PanelAction[] {
-  if (!('message' in outcome)) {
-    const operation = 'operation' in outcome ? outcome.operation : undefined;
-    const matched = operation && { operation, operationUrl: operationUrl(dashboardUrl, operation) };
-    return [{ type: 'result', renderId, entry: { ...request, status: outcome.status, errors: outcome.errors, ...matched } }];
+  const noticeOf = (kind: Notice['kind'], message: string): PanelAction => ({ type: 'notice', renderId, notice: { kind, message } });
+  if ('message' in outcome) {
+    if (outcome.status !== 'unreachable') return [noticeOf(outcome.status, outcome.message)];
+    const entry: Entry = { ...request, status: 'unreachable', errors: [], message: outcome.message };
+    return [{ type: 'result', renderId, entry }, noticeOf('unreachable', outcome.message)];
   }
-  const notice: PanelAction = { type: 'notice', renderId, notice: { kind: outcome.status, message: outcome.message } };
-  if (outcome.status !== 'unreachable') return [notice];
-  const entry: Entry = { ...request, status: 'unreachable', errors: [], message: outcome.message };
-  return [{ type: 'result', renderId, entry }, notice];
+  const operation = 'operation' in outcome ? outcome.operation : undefined;
+  const matched = operation && { operation, operationUrl: operationUrl(dashboardUrl, operation) };
+  const result: PanelAction = { type: 'result', renderId, entry: { ...request, status: outcome.status, errors: outcome.errors, ...matched } };
+  return outcome.partialUnsupportedMessage === undefined ? [result] : [result, noticeOf('partial-unsupported', outcome.partialUnsupportedMessage)];
 }
 
 // The panel shows the pair as sent to Mokapi, with the bodies cut: Mokapi gets the full payload.
@@ -183,8 +190,8 @@ function validate(mocked: MockedResponse, { emit, dashboardUrl }: HookOptions): 
   // The async function clones first, in this tick: the application gets the original pair and may read it any
   // moment. A throw (also from showing the result) becomes a notice and still settles the request.
   void (async () => {
-    const payload = await serializePair(request.clone(), response.clone(), render.api);
-    const settle = (answer: unknown) => classify(dashboardUrl, answer);
+    const payload = await serializePair(request.clone(), response.clone(), render.api, render.partial);
+    const settle = (answer: unknown) => classify(dashboardUrl, answer, render.partial);
     const outcome = await sendValidation(dashboardUrl, payload).then(settle, settle);
     toPanelActions(outcome, render.renderId, {
       sequence,
@@ -215,7 +222,7 @@ function observe(worker: MswWorker, options: HookOptions): void {
 // Runs before every story render and never throws: it runs for every story of the project.
 // A mount starts a new Render and a new panel list, a re-render continues the Render of its mount.
 export function validationHook(context: HookContext, options: HookOptions): void {
-  const { api, disable, test } = context.parameters.mokapi ?? {};
+  const { api, disable, test, partial: partialParameter } = context.parameters.mokapi ?? {};
   const validating = context.globals.mokapiValidation === 'on' && !disable;
   // A switch of the validation re-renders before the addon remounts: that render must not judge the old results.
   const mounted = context.abortSignal && rendersOfMount.get(context.abortSignal);
@@ -225,17 +232,20 @@ export function validationHook(context: HookContext, options: HookOptions): void
     return;
   }
   const { mode, invalid } = resolveTestMode(test, options.defaultTest);
+  const resolvedPartial = resolvePartial(partialParameter, options.defaultPartial);
+  const partial = validating && resolvedPartial.partial;
   const worker = isWorker(context.msw) ? context.msw : undefined;
-  const render = newRender(++renderCount, { api, validating, sending: validating && worker !== undefined, mode });
+  const render = newRender(++renderCount, { api, partial, validating, sending: validating && worker !== undefined, mode });
   current = render;
   rendersOfContext.set(context, render);
   if (context.abortSignal) rendersOfMount.set(context.abortSignal, render);
   const emit = (action: PanelAction) => announce(render, options.emit, action);
 
   if (validating || worker !== undefined) {
-    emit({ type: 'render-started', storyId: context.id, renderId: render.renderId, ...(validating && { testMode: mode }) });
+    emit({ type: 'render-started', storyId: context.id, renderId: render.renderId, ...(validating && { testMode: mode }), ...(partial && { partial }) });
   }
   if (validating && invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TEST_PARAMETER_MESSAGE } });
+  if (validating && resolvedPartial.invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_PARTIAL_PARAMETER_MESSAGE } });
   if (worker !== undefined) return observe(worker, options);
   if (validating) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'worker-missing', message: WORKER_MISSING } });
 }
@@ -307,7 +317,7 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
 
   const status = reportStatus(render.state, render.mode);
   const { entries, notices } = render.state;
-  context.reporting.addReport({ type: 'mokapi', version: 1, status, result: { entries, notices, testMode: render.mode } });
+  context.reporting.addReport({ type: 'mokapi', version: 1, status, result: { entries, notices, testMode: render.mode, ...(render.partial && { partial: true }) } });
   announce(render, options.emit, { type: 'report', renderId: render.renderId, storyId: context.id, status, headline: headline(render.state), invalid: invalidCount(render.state), valid: validCount(render.state) });
   if (status === 'failed' && isVitestBrowserRun()) throw new MokapiContractError(errorMessage(render.state));
 }

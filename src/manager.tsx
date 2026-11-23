@@ -18,6 +18,7 @@ import {
   formatTime,
   KIND_LABELS,
   methodColor,
+  PARTIAL_TEXT,
   reportBadge,
   reportHeadline,
   sidebarStatus,
@@ -403,8 +404,8 @@ function RerunButton() {
 }
 
 function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: string }) {
-  const { entries, testMode, report } = state;
-  const badge = reportBadge(testMode, report, entries);
+  const { entries, testMode, report, partial } = state;
+  const badge = reportBadge(testMode, report, entries, partial);
   const headline = reportHeadline(report, state);
   const counts = countLine(entries);
   return (
@@ -413,6 +414,7 @@ function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: st
       {headline && <Headline data-testid="mokapi-report-headline">{headline}</Headline>}
       {counts && <ToolbarText data-testid="mokapi-report-counts">{counts}</ToolbarText>}
       {testMode === 'off' && <ToolbarText data-testid="mokapi-test-mode">{testModeText(testMode)}</ToolbarText>}
+      {partial && <ToolbarText data-testid="mokapi-partial">{PARTIAL_TEXT}</ToolbarText>}
       <ToolbarActions>
         <RerunButton />
         {dashboardUrl && <Link href={dashboardUrl} target="_blank" rel="noreferrer">Open Mokapi dashboard</Link>}

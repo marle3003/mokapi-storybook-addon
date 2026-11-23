@@ -30,7 +30,7 @@ export interface Entry {
 }
 
 export interface Notice {
-  kind: 'unreachable' | 'endpoint-missing' | 'config-error' | 'timeout' | 'worker-missing';
+  kind: 'unreachable' | 'endpoint-missing' | 'config-error' | 'timeout' | 'worker-missing' | 'partial-unsupported';
   message: string;
 }
 
@@ -50,9 +50,9 @@ export interface Report {
 
 // renderId is unique per mount of a story (a re-render keeps it), so late answers of an earlier mount can be recognized.
 // The report names its story, because the sidebar status is set for it and stories on a Docs page count their renderIds each.
-// testMode is set while the render is validated.
+// testMode is set while the render is validated, partial when it validates with partial responses.
 export type PanelAction =
-  | { type: 'render-started'; storyId: string; renderId: number; testMode?: TestMode }
+  | { type: 'render-started'; storyId: string; renderId: number; testMode?: TestMode; partial?: true }
   | { type: 'result'; renderId: number; entry: Entry }
   | { type: 'notice'; renderId: number; notice: Notice }
   | ({ type: 'report'; renderId: number; storyId: string } & Report);
@@ -61,6 +61,8 @@ export interface PanelState {
   storyId?: string;
   renderId: number;
   testMode?: TestMode;
+  /** Set while the story validates with partial responses. */
+  partial?: true;
   entries: Entry[];
   notices: Notice[];
   /** Set once the story's afterEach has judged the render. */
@@ -71,7 +73,7 @@ export const initialPanelState: PanelState = { renderId: 0, entries: [], notices
 
 export function reducePanel(state: PanelState, action: PanelAction): PanelState {
   if (action.type === 'render-started') {
-    return { ...initialPanelState, storyId: action.storyId, renderId: action.renderId, ...(action.testMode && { testMode: action.testMode }) };
+    return { ...initialPanelState, storyId: action.storyId, renderId: action.renderId, ...(action.testMode && { testMode: action.testMode }), ...(action.partial && { partial: action.partial }) };
   }
   if (action.renderId !== state.renderId) return state;
   if (action.type === 'report') return { ...state, report: { status: action.status, headline: action.headline, invalid: action.invalid, valid: action.valid } };

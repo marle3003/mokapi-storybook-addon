@@ -9,6 +9,8 @@ const failingOptions: MokapiAddonOptions = { defaultTest: 'error' };
 void failingOptions;
 const testMode: TestMode = 'off';
 void testMode;
+const partialOptions: MokapiAddonOptions = { defaultPartial: true };
+void partialOptions;
 const defaultOptions: MokapiAddonOptions = {};
 void defaultOptions;
 
@@ -18,6 +20,8 @@ const disabled: Parameters = { mokapi: { disable: true } };
 void disabled;
 const withTest: Parameters = { mokapi: { test: 'warning' } };
 void withTest;
+const withPartial: Parameters = { mokapi: { partial: true } };
+void withPartial;
 const empty: Parameters = { mokapi: {} };
 void empty;
 
@@ -54,3 +58,9 @@ void todoTest;
 // @ts-expect-error TestMode is a union of strings, not a boolean.
 const booleanTestMode: TestMode = true;
 void booleanTestMode;
+// @ts-expect-error defaultPartial is a boolean.
+const stringDefaultPartial: MokapiAddonOptions = { defaultPartial: 'yes' };
+void stringDefaultPartial;
+// @ts-expect-error partial is a boolean.
+const stringPartial: Parameters = { mokapi: { partial: 'yes' } };
+void stringPartial;

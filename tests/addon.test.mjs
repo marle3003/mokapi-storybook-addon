@@ -20,10 +20,12 @@ import {
   headline,
   methodColor,
   operationUrl,
+  PARTIAL_TEXT,
   PASSED_TEXT,
   reportBadge,
   reportHeadline,
   reportStatus,
+  resolvePartial,
   resolveTestMode,
   sidebarStatus,
   SKIP_HEADLINE,
@@ -37,14 +39,14 @@ import {
 import { classify, sendValidation, serializePair, unreadableMessage } from '../dist/validation.js';
 
 test('options default to the local Mokapi dashboard and validation off', () => {
-  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'warning' });
+  assert.deepEqual(resolveOptions(), { dashboardUrl: 'http://localhost:8080', defaultValidation: false, defaultTest: 'warning', defaultPartial: false });
   assert.deepEqual(resolveOptions({}), resolveOptions());
 });
 
 test('options keep the given values and strip trailing slashes from the dashboard URL', () => {
   assert.deepEqual(
     resolveOptions({ dashboardUrl: 'https://mokapi.example.com/', defaultValidation: true }),
-    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true, defaultTest: 'warning' },
+    { dashboardUrl: 'https://mokapi.example.com', defaultValidation: true, defaultTest: 'warning', defaultPartial: false },
   );
 });
 
@@ -53,6 +55,13 @@ test('options accept the test modes error, warning and off and reject anything e
   // `todo` was the name of `warning` before.
   for (const defaultTest of ['strict', 'todo', '', true, null]) {
     assert.throws(() => resolveOptions({ defaultTest }), /^Error: Mokapi: defaultTest must be 'error', 'warning' or 'off'\.$/);
+  }
+});
+
+test('options accept a boolean defaultPartial and reject anything else', () => {
+  for (const defaultPartial of [true, false]) assert.equal(resolveOptions({ defaultPartial }).defaultPartial, defaultPartial);
+  for (const defaultPartial of ['yes', 1, null, 'true']) {
+    assert.throws(() => resolveOptions({ defaultPartial }), /^Error: Mokapi: defaultPartial must be true or false\.$/);
   }
 });
 
@@ -90,6 +99,14 @@ const answers = {
   unknownApi: { message: "api 'Unknown API' not found" },
 };
 
+// Answers of Mokapi 0.60.0 to a request with partialResponse: true, they echo the option.
+const partialAnswers = {
+  valid: { ...answers.valid, partialResponse: true },
+  invalid: { ...answers.invalid, partialResponse: true },
+  noOperation: { ...answers.noOperation, partialResponse: true },
+  ambiguous: { ...answers.ambiguous, partialResponse: true },
+};
+
 test('serialization sends method, path with query, headers, status and API of a GET', async () => {
   const request = new Request('http://localhost:6006/api/profile?id=1', { headers: { Accept: 'application/json' } });
   const response = Response.json({ name: 'Jane Doe' }, { status: 201, headers: { 'X-Custom': 'a' } });
@@ -111,6 +128,15 @@ test('serialization sends the text body of a POST and omits the API when unset',
   assert.equal(payload.request.body, '{"name":"Jane"}');
   assert.equal(payload.response.body, '');
   assert.equal('api' in payload, false);
+});
+
+test('serialization sends partialResponse only for a partial story', async () => {
+  const pair = () => [new Request('http://localhost:6006/api/profile'), Response.json({ name: 'Rex' })];
+  assert.equal((await serializePair(...pair(), 'Profile API', true)).partialResponse, true);
+  assert.equal((await serializePair(...pair(), undefined, true)).partialResponse, true);
+  for (const payload of [await serializePair(...pair(), 'Profile API', false), await serializePair(...pair(), 'Profile API'), await serializePair(...pair())]) {
+    assert.equal('partialResponse' in payload, false);
+  }
 });
 
 test('serialization sends an empty body when a body cannot be read', async () => {
@@ -157,6 +183,38 @@ test('classification keeps Mokapi\'s message when no operation or several APIs m
   const ambiguous = await classifyAnswer(answers.ambiguous);
   assert.equal(ambiguous.status, 'not-in-contract');
   assert.match(ambiguous.errors[0].message, /ambiguous operation: .*'Profile API', 'Profile API v2'/);
+});
+
+const partialUnsupported = "The Mokapi at http://localhost:8080 doesn't support partial responses and must be updated to 0.60.0.";
+
+test('classification of a partial request accepts the answers that echo partialResponse', async () => {
+  for (const answer of Object.values(partialAnswers)) {
+    assert.equal('partialUnsupportedMessage' in await classify(dashboardUrl, Response.json(answer), true), false);
+  }
+  assert.deepEqual(await classify(dashboardUrl, Response.json(partialAnswers.valid), true), { status: 'valid', errors: [], operation: answers.valid.operation });
+});
+
+test('classification of a partial request flags a valid, an invalid and a not-in-contract answer without the echo', async () => {
+  for (const [answer, status] of [[answers.valid, 'valid'], [answers.invalid, 'invalid'], [answers.noOperation, 'not-in-contract'], [answers.ambiguous, 'not-in-contract']]) {
+    const outcome = await classify(dashboardUrl, Response.json(answer), true);
+    assert.equal(outcome.status, status);
+    assert.deepEqual(outcome.errors, answer.errors);
+    assert.equal(outcome.partialUnsupportedMessage, partialUnsupported);
+  }
+  assert.equal((await classify(dashboardUrl, Response.json({ ...answers.valid, partialResponse: false }), true)).partialUnsupportedMessage, partialUnsupported);
+});
+
+test('classification of a request that did not ask for partial responses flags nothing', async () => {
+  for (const answer of [answers.valid, answers.invalid, answers.noOperation, partialAnswers.valid]) {
+    assert.equal('partialUnsupportedMessage' in await classify(dashboardUrl, Response.json(answer)), false);
+    assert.equal('partialUnsupportedMessage' in await classify(dashboardUrl, Response.json(answer), false), false);
+  }
+});
+
+test('classification of a partial request keeps the other outcomes as they are', async () => {
+  assert.equal((await classify(dashboardUrl, new Response('Method Not Allowed', { status: 405 }), true)).status, 'endpoint-missing');
+  assert.deepEqual(await classify(dashboardUrl, Response.json(answers.unknownApi, { status: 404 }), true), { status: 'config-error', message: "api 'Unknown API' not found" });
+  assert.equal((await classify(dashboardUrl, new TypeError('Failed to fetch'), true)).status, 'unreachable');
 });
 
 test('classification reports an unknown API as configuration error with Mokapi\'s message', async () => {
@@ -245,7 +303,7 @@ function recorder() {
   };
 }
 
-const hookOptions = (panel, defaultTest = 'warning') => ({ emit: panel.emit, dashboardUrl, defaultTest });
+const hookOptions = (panel, defaultTest = 'warning', defaultPartial = false) => ({ emit: panel.emit, dashboardUrl, defaultTest, defaultPartial });
 
 test('hook registers its listeners once per worker across repeated runs', () => {
   const worker = fakeWorker();
@@ -291,6 +349,127 @@ test('hook announces no test mode with validation off or for a disabled story', 
   validationHook(storyContext(worker, { mokapi: { disable: true, test: 'error' } }), hookOptions(panel));
   assert.equal(panel.actions.length, 2);
   for (const action of panel.actions) assert.equal('testMode' in action, false);
+});
+
+test('hook announces partial responses while validating, from defaultPartial or the story parameter', () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker, { id: 'a--default' }), hookOptions(panel, 'warning', true));
+  validationHook(storyContext(worker, { id: 'a--off', mokapi: { partial: false } }), hookOptions(panel, 'warning', true));
+  validationHook(storyContext(worker, { id: 'a--on', mokapi: { partial: true } }), hookOptions(panel));
+  validationHook(storyContext(worker, { id: 'a--strict' }), hookOptions(panel));
+  validationHook(storyContext(undefined, { id: 'a--no-worker', mokapi: { partial: true } }), hookOptions(panel));
+  const started = panel.actions.filter(({ type }) => type === 'render-started');
+  assert.deepEqual(started.map(({ storyId, partial }) => [storyId, partial]), [
+    ['a--default', true], ['a--off', undefined], ['a--on', true], ['a--strict', undefined], ['a--no-worker', true],
+  ]);
+  assert.equal('partial' in started[1], false);
+});
+
+test('hook announces no partial responses with validation off or for a disabled story', () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker, { validation: 'off', mokapi: { partial: true } }), hookOptions(panel));
+  validationHook(storyContext(worker, { mokapi: { disable: true, partial: true } }), hookOptions(panel, 'warning', true));
+  assert.equal(panel.actions.length, 2);
+  for (const action of panel.actions) assert.equal('partial' in action, false);
+});
+
+test('an invalid partial parameter shows a configuration notice while validating and the story uses defaultPartial', () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  const notices = () => panel.actions.filter(({ type }) => type === 'notice').map(({ notice }) => [notice.kind, notice.message]);
+  validationHook(storyContext(worker, { mokapi: { partial: 'yes' } }), hookOptions(panel, 'warning', true));
+  assert.deepEqual(notices(), [['config-error', 'Mokapi: parameters.mokapi.partial must be true or false.']]);
+  assert.equal(panel.actions[0].partial, true);
+  validationHook(storyContext(worker, { mokapi: { partial: 'yes' } }), hookOptions(panel));
+  assert.equal(panel.actions.filter(({ type }) => type === 'render-started')[1].partial, undefined);
+  assert.equal(notices().length, 2);
+
+  const quiet = recorder();
+  validationHook(storyContext(worker, { validation: 'off', mokapi: { partial: 'yes' } }), hookOptions(quiet));
+  assert.deepEqual(quiet.actions.filter(({ type }) => type === 'notice'), []);
+});
+
+test('an invalid partial parameter fails the story in mode error and warns in mode warning', async () => {
+  for (const [mode, status] of [['error', 'failed'], ['warning', 'warning']]) {
+    const panel = recorder();
+    const context = testContext(fakeWorker(), { mokapi: { test: mode, partial: 'yes' } });
+    validationHook(context, hookOptions(panel));
+    await testHook(context, hookOptions(panel)).catch(() => {});
+    assert.equal(context.reports[0].status, status);
+    assert.equal(panel.actions.find(({ type }) => type === 'report').headline, 'Mokapi: parameters.mokapi.partial must be true or false.');
+  }
+});
+
+test('listener sends partialResponse for a partial story only and shows the answer as a result without notice', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(partialAnswers.valid));
+  for (const [mokapi, defaultPartial, expected] of [[{ partial: true }, false, true], [undefined, true, true], [{ partial: false }, true, undefined], [undefined, false, undefined]]) {
+    fetch.mock.resetCalls();
+    const panel = recorder();
+    const worker = fakeWorker();
+    validationHook(storyContext(worker, { mokapi }), hookOptions(panel, 'warning', defaultPartial));
+    const result = panel.next();
+    worker.mocked(getProfile(), jsonResponse());
+    await result;
+    await settled();
+    assert.equal(JSON.parse(fetch.mock.calls[0].arguments[1].body).partialResponse, expected);
+    assert.deepEqual(panel.actions.filter(({ type }) => type !== 'render-started').map(({ type }) => type), ['result']);
+  }
+});
+
+test('listener shows the entry and one notice for every request when Mokapi does not echo partialResponse', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  validationHook(storyContext(worker, { mokapi: { partial: true } }), hookOptions(panel));
+  worker.mocked(getProfile(), jsonResponse(), 'first');
+  worker.mocked(getProfile(), jsonResponse(), 'second');
+  await settled();
+  await settled();
+  const shown = panel.actions.reduce(reducePanel, initialPanelState);
+  assert.deepEqual(shown.entries.map(({ status, errors }) => [status, errors]), [['invalid', answers.invalid.errors], ['invalid', answers.invalid.errors]]);
+  assert.deepEqual(shown.notices, [{ kind: 'partial-unsupported', message: partialUnsupported }]);
+  assert.equal(shown.partial, true);
+});
+
+test('a partial story with an old Mokapi fails in mode error and warns in mode warning, a strict story is not affected', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  for (const [mokapi, status] of [[{ test: 'error', partial: true }, 'failed'], [{ test: 'warning', partial: true }, 'warning'], [{ test: 'error', partial: false }, 'passed']]) {
+    const panel = recorder();
+    const worker = fakeWorker();
+    const context = testContext(worker, { mokapi });
+    validationHook(context, hookOptions(panel));
+    worker.started(getProfile());
+    const finished = testHook(context, hookOptions(panel));
+    worker.mocked(getProfile(), jsonResponse());
+    await finished.catch(() => {});
+    assert.equal(context.reports[0].status, status);
+    if (status !== 'passed') assert.equal(panel.actions.find(({ type }) => type === 'report').headline, partialUnsupported);
+  }
+});
+
+test('a re-render keeps the partial responses of the mount and a remount resolves them again', () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  const first = testContext(worker, { mokapi: { partial: true } });
+  validationHook(first, hookOptions(panel));
+  const rerender = { ...testContext(worker, { mokapi: { partial: true } }), abortSignal: first.abortSignal };
+  validationHook(rerender, hookOptions(panel));
+  assert.equal(panel.actions.filter(({ type }) => type === 'render-started').length, 1);
+  validationHook(testContext(worker, { mokapi: { partial: false } }), hookOptions(panel));
+  const started = panel.actions.filter(({ type }) => type === 'render-started');
+  assert.deepEqual(started.map(({ partial }) => partial), [true, undefined]);
+});
+
+test('the report holds partial responses only for a partial story', async () => {
+  for (const [mokapi, partial] of [[{ test: 'error', partial: true }, true], [{ test: 'error' }, undefined]]) {
+    const context = testContext(fakeWorker(), { mokapi });
+    validationHook(context, hookOptions(recorder()));
+    await testHook(context, hookOptions(recorder()));
+    assert.equal(context.reports[0].result.partial, partial);
+    assert.equal('partial' in context.reports[0].result, partial === true);
+  }
 });
 
 test('listener sends the mocked pair with the API of the story and reports the result', async (t) => {
@@ -407,6 +586,7 @@ const invalidEntry = (overrides = {}) => ({
 const validEntry = () => invalidEntry({ status: 'valid', errors: [] });
 const notInContractEntry = () => ({ ...invalidEntry({ status: 'not-in-contract' }), operation: undefined, operationUrl: undefined });
 const panelNotice = (kind, message = `${kind} message`) => ({ kind, message });
+const escapeForRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const stateOf = (entries = [], notices = []) => ({ ...initialPanelState, entries, notices });
 
 test('the test mode of a story is its parameter, an invalid parameter falls back to the default and is flagged', () => {
@@ -601,6 +781,51 @@ test('count line leaves out kinds without entries and uses the singular for one 
 
 test('count line is undefined without entries', () => {
   assert.equal(countLine([]), undefined);
+});
+
+test('the partial parameter overrides defaultPartial', () => {
+  for (const defaultPartial of [true, false]) {
+    assert.deepEqual(resolvePartial(undefined, defaultPartial), { partial: defaultPartial, invalid: false });
+    assert.deepEqual(resolvePartial(true, defaultPartial), { partial: true, invalid: false });
+    assert.deepEqual(resolvePartial(false, defaultPartial), { partial: false, invalid: false });
+  }
+});
+
+test('an invalid partial parameter falls back to defaultPartial and is flagged', () => {
+  for (const parameter of ['yes', 'true', 1, 0, null, {}]) {
+    assert.deepEqual(resolvePartial(parameter, true), { partial: true, invalid: true });
+    assert.deepEqual(resolvePartial(parameter, false), { partial: false, invalid: true });
+  }
+});
+
+test('the partial text says that missing properties are not checked', () => {
+  assert.equal(PARTIAL_TEXT, 'Partial responses: missing properties are not checked.');
+});
+
+test('badge says PARTIAL, green like PASS, for a passed partial story with a valid response', () => {
+  const partial = { label: 'PARTIAL', status: 'positive' };
+  for (const mode of ['error', 'warning']) {
+    assert.deepEqual(reportBadge(mode, { status: 'passed', headline: '' }, [validEntry()], true), partial);
+    assert.deepEqual(reportBadge(mode, { status: 'passed', headline: '' }, [validEntry(), notInContractEntry()], true), partial);
+  }
+  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [validEntry()], false), { label: 'PASS', status: 'positive' });
+});
+
+test('badge of a partial story keeps WARN, FAIL, SKIP and WAIT and shows nothing in mode off', () => {
+  assert.deepEqual(reportBadge('warning', { status: 'warning', headline: 'x' }, [invalidEntry()], true), { label: 'WARN', status: 'warning' });
+  assert.deepEqual(reportBadge('error', { status: 'failed', headline: 'x' }, [invalidEntry()], true), { label: 'FAIL', status: 'negative' });
+  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [], true), { label: 'SKIP', status: 'mediumdark' });
+  assert.deepEqual(reportBadge('error', { status: 'passed', headline: '' }, [notInContractEntry()], true), { label: 'SKIP', status: 'mediumdark' });
+  assert.deepEqual(reportBadge('error', undefined, [], true), { label: 'WAIT', status: 'mediumdark' });
+  assert.equal(reportBadge('off', { status: 'passed', headline: '' }, [validEntry()], true), undefined);
+});
+
+test('a partial-unsupported notice makes the report failing in mode error and a warning in mode warning', () => {
+  const state = stateOf([validEntry()], [panelNotice('partial-unsupported', partialUnsupported)]);
+  assert.equal(reportStatus(state, 'error'), 'failed');
+  assert.equal(reportStatus(state, 'warning'), 'warning');
+  assert.equal(headline(state), partialUnsupported);
+  assert.match(errorMessage(state), new RegExp(`^Mokapi contract validation failed: ${escapeForRegExp(partialUnsupported)}`));
 });
 
 test('badge says WAIT until the report exists, in every mode but off', () => {
@@ -1782,7 +2007,7 @@ test('preset adds the preview annotation and the manager entry after the existin
 test('preset defines the resolved options for the preview and sets up no proxy', () => {
   const config = viteFinal({ server: { port: 6006 } }, { dashboardUrl: 'http://localhost:9090/', defaultValidation: true });
   assert.deepEqual(JSON.parse(config.define.__MOKAPI_STORYBOOK_OPTIONS__), {
-    dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'warning',
+    dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'warning', defaultPartial: false,
   });
   assert.deepEqual(config.server, { port: 6006 });
   assert.equal(JSON.stringify(config).includes('proxy'), false);
@@ -1998,6 +2223,29 @@ test('a test run result of a warning report keeps its entries, notices and test 
     data: { invalid: 1 },
     sidebarContextMenu: false,
   });
+});
+
+test('a test run result of a partial story shows partial responses and its report stays passed', () => {
+  const result = { entries: [validEntry()], notices: [], testMode: 'error', partial: true };
+  const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('passed', result)] });
+  const runs = testRunResults(run);
+  assert.equal(runs['a--one'].partial, true);
+  assert.equal(runs['a--one'].report.status, 'passed');
+  const panel = panelOf(initialPanelState, runs, 'a--one');
+  assert.equal(panel.partial, true);
+  assert.deepEqual(reportBadge(panel.testMode, panel.report, panel.entries, panel.partial), { label: 'PARTIAL', status: 'positive' });
+});
+
+test('a test run result of a strict story or with a non-true partial shows no partial responses', () => {
+  for (const partial of [undefined, false, 'yes']) {
+    const result = { entries: [validEntry()], notices: [], testMode: 'error', ...(partial !== undefined && { partial }) };
+    const run = testRunOf([componentTest('a--one')], { 'a--one': [mokapiReport('passed', result)] });
+    const runs = testRunResults(run);
+    assert.equal('partial' in runs['a--one'], false);
+    const panel = panelOf(initialPanelState, runs, 'a--one');
+    assert.equal('partial' in panel, false);
+    assert.deepEqual(reportBadge(panel.testMode, panel.report, panel.entries, panel.partial), { label: 'PASS', status: 'positive' });
+  }
 });
 
 test('a test run result carries the number of invalid responses in its report', () => {

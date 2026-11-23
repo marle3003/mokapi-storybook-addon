@@ -6,6 +6,11 @@ export interface MokapiAddonOptions {
   defaultValidation?: boolean;
   /** Test mode of all stories, `parameters.mokapi.test` overrides it. Default `warning`. */
   defaultTest?: TestMode;
+  /**
+   * Validates the stories' responses with partial responses: Mokapi doesn't report missing properties in the response
+   * body, but still checks everything the body contains. `parameters.mokapi.partial` overrides it. Default `false`.
+   */
+  defaultPartial?: boolean;
 }
 
 export type ResolvedAddonOptions = Required<MokapiAddonOptions>;
@@ -20,4 +25,6 @@ export interface MokapiStoryParameters {
   disable?: boolean;
   /** Overrides `defaultTest` for this story. */
   test?: TestMode;
+  /** Overrides `defaultPartial` for this story. */
+  partial?: boolean;
 }

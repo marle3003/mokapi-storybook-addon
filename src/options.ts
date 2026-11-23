@@ -14,7 +14,7 @@ function isHttpUrl(value: string): boolean {
 
 // Storybook passes the addon options untyped, so every option is checked.
 export function resolveOptions(options: Partial<MokapiAddonOptions> = {}): ResolvedAddonOptions {
-  const { dashboardUrl = 'http://localhost:8080', defaultValidation = false, defaultTest = 'warning' } = options;
+  const { dashboardUrl = 'http://localhost:8080', defaultValidation = false, defaultTest = 'warning', defaultPartial = false } = options;
   if (typeof dashboardUrl !== 'string' || !isHttpUrl(dashboardUrl)) {
     throw new Error('Mokapi: dashboardUrl must be an HTTP(S) URL.');
   }
@@ -24,5 +24,8 @@ export function resolveOptions(options: Partial<MokapiAddonOptions> = {}): Resol
   if (!isTestMode(defaultTest)) {
     throw new Error("Mokapi: defaultTest must be 'error', 'warning' or 'off'.");
   }
-  return { dashboardUrl: dashboardUrl.replace(/\/+$/, ''), defaultValidation, defaultTest };
+  if (typeof defaultPartial !== 'boolean') {
+    throw new Error('Mokapi: defaultPartial must be true or false.');
+  }
+  return { dashboardUrl: dashboardUrl.replace(/\/+$/, ''), defaultValidation, defaultTest, defaultPartial };
 }

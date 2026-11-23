@@ -31,6 +31,8 @@ export interface StoryRun {
   entries: Entry[];
   notices: Notice[];
   testMode?: TestMode;
+  /** The story validated with partial responses. */
+  partial?: true;
 }
 
 export type StoryRuns = Readonly<Record<string, StoryRun>>;
@@ -39,17 +41,17 @@ type RunReport = NonNullable<TestRunPayload['reports'][string]>[number];
 
 // addon-vitest keeps the reports of a story only when its test passed, so a failed story is known by its error
 // text alone, which starts with `CONTRACT_ERROR_PREFIX`.
-const isResult = (result: unknown): result is { entries: Entry[]; notices: Notice[]; testMode?: unknown } =>
+const isResult = (result: unknown): result is { entries: Entry[]; notices: Notice[]; testMode?: unknown; partial?: unknown } =>
   typeof result === 'object' && result !== null && 'entries' in result && Array.isArray(result.entries) && 'notices' in result && Array.isArray(result.notices);
 
 // A passed report is a result only with a valid response: without one the story was skipped and has nothing to show.
 function runOfReport(reports: RunReport[] = []): StoryRun | undefined {
   const report = reports.find(({ type, version }) => type === 'mokapi' && version === 1);
   if (report === undefined || (report.status !== 'passed' && report.status !== 'warning' && report.status !== 'failed') || !isResult(report.result)) return undefined;
-  const { entries, notices, testMode } = report.result;
+  const { entries, notices, testMode, partial } = report.result;
   const valid = validCount(report.result);
   if (report.status === 'passed' && valid === 0) return undefined;
-  return { report: { status: report.status, headline: headline(report.result), invalid: invalidCount(report.result), valid }, entries, notices, ...(isTestMode(testMode) && { testMode }) };
+  return { report: { status: report.status, headline: headline(report.result), invalid: invalidCount(report.result), valid }, entries, notices, ...(isTestMode(testMode) && { testMode }), ...(partial === true && { partial }) };
 }
 
 // A contract error fails the story only in test mode `error`.
@@ -116,6 +118,6 @@ export type StoryPanel = PanelState & { fromTestRun?: true };
 // The result of the last test run wins over the UI state: the manager drops it when the UI reports newer results.
 export function panelOf(ui: PanelState, runs: StoryRuns, storyId: string): StoryPanel {
   if (!Object.hasOwn(runs, storyId)) return resultsOfStory(ui, storyId);
-  const { report, entries, notices, testMode } = runs[storyId];
-  return { storyId, renderId: 0, entries, notices, report, ...(testMode && { testMode }), fromTestRun: true };
+  const { report, entries, notices, testMode, partial } = runs[storyId];
+  return { storyId, renderId: 0, entries, notices, report, ...(testMode && { testMode }), ...(partial && { partial }), fromTestRun: true };
 }

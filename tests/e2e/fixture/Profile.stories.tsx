@@ -72,3 +72,19 @@ export const WithoutWorker = {
   loaders: [(context: { msw?: unknown }) => { delete context.msw; }],
   parameters: { msw: { handlers: [profileHandler(jane)] } },
 };
+
+// Stories for partial responses (`parameters.mokapi.partial`). The mock lacks the required `email`.
+const partialProfile = { name: 'Rex' };
+
+export const Partial = {
+  parameters: { mokapi: { partial: true }, msw: { handlers: [profileHandler(partialProfile)] } },
+};
+
+// The same mock as `Partial`: without partial responses the missing `email` is invalid.
+export const PartialOff = {
+  parameters: { mokapi: { partial: false }, msw: { handlers: [profileHandler(partialProfile)] } },
+};
+
+export const InvalidPartialParameter = {
+  parameters: { mokapi: { partial: 'yes' }, msw: { handlers: [profileHandler(jane)] } },
+};

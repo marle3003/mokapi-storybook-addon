@@ -49,7 +49,7 @@ with `passthrough()`, that no handler matches or that you answer with
 
 ## Requirements
 
-- [Mokapi](https://mokapi.io/docs/get-started/installation) 0.58.0 or newer
+- [Mokapi](https://mokapi.io/docs/get-started/installation) 0.58.0 or newer (0.60.0 for [partial responses](#partial-responses))
 - Storybook 10.6.7 or newer with the Vite builder and CSF3 stories
 - MSW 2.15.0 or newer
 - Node.js 22.12.0 or newer
@@ -211,6 +211,62 @@ export const ThirdParty = {
 
 The addon sends nothing to Mokapi for this story, also when the toggle is on.
 
+## Partial responses
+
+A story often mocks only the data it needs, for example a long `name` to test a
+layout. Against a contract with required properties, such a mock is invalid, and
+every story with partial data shows a red entry. With partial responses, Mokapi
+doesn't report missing properties in the response body, but still checks
+everything the story delivers.
+
+Switch it on for all stories with `defaultPartial` in `.storybook/main.ts`:
+
+```ts
+// .storybook/main.ts
+export default {
+  addons: [
+    {
+      name: 'mokapi-storybook-addon',
+      options: {
+        defaultPartial: true, // default false
+      },
+    },
+  ],
+};
+```
+
+`parameters.mokapi.partial` overrides it for a story, a component or the whole
+project, like `test` overrides `defaultTest`:
+
+```ts
+// A story that must deliver the complete response
+export const Complete = {
+  parameters: {
+    mokapi: { partial: false },
+  },
+};
+```
+
+For a story with partial responses, the addon sends `"partialResponse": true` to
+Mokapi with every validation. Otherwise it leaves the field out.
+
+Mokapi skips these checks in the response body, on every nesting level:
+
+- `required`
+- `dependentRequired`
+- `oneOf`: one matching subschema is enough. If several match, the body is valid,
+  because without the required properties the variants often can't be told apart
+
+Everything else stays strict: types, formats, enums and `additionalProperties`
+for the properties the body contains. The request is validated strictly too.
+Required response headers and a missing response body are still reported.
+
+The panel shows that a story validates with partial responses, so a green result
+isn't read as "complete", see [Toolbar](#toolbar). Mokapi describes the checks in
+[Partial responses](https://mokapi.io/docs/configuration/dashboard-api#partial-responses).
+It needs Mokapi 0.60.0. With an older Mokapi, the panel shows a notice, see
+[Notices](#notices).
+
 ## Panel and badge
 
 The **Mokapi** panel shows the responses of the selected story since it was
@@ -228,7 +284,7 @@ are not in the contract and not-reachable entries are not counted.
 While validation is on, the panel starts with a toolbar. From left to right it
 has:
 
-- A report badge: `PASS`, `WARN`, `FAIL`, `SKIP` or `WAIT`. Hover it to see the
+- A report badge: `PASS`, `PARTIAL`, `WARN`, `FAIL`, `SKIP` or `WAIT`. Hover it to see the
   test mode of the story. See the table below.
 - A headline in bold, only for `WARN`, `FAIL` and `SKIP`. For `WARN` and `FAIL` it
   is the headline of the [error message](#error-message), for example
@@ -239,6 +295,9 @@ has:
   `2 responses validated, 1 valid, 1 invalid`. The line counts all entries since
   the story was mounted and updates as results come in. Kinds that don't occur
   are left out (`valid`, `invalid`, `not in contract`, `Mokapi not reachable`).
+- The line `Partial responses: missing properties are not checked.`, only while
+  the story validates with [partial responses](#partial-responses). It is shown
+  in every state, also next to `WARN` and `FAIL`.
 - The **Rerun** icon button and a link to the Mokapi dashboard, on the right.
 
 The badge depends on the test mode of the story, see
@@ -250,9 +309,13 @@ The badge depends on the test mode of the story, see
 | `FAIL` | Test mode `'error'` and a failing result |
 | `WARN` | Test mode `'warning'` and a failing result |
 | `PASS` | No failing result and at least one valid response |
+| `PARTIAL` | Like `PASS`, for a story with [partial responses](#partial-responses). Green as well |
 | `SKIP` | No failing result and no valid response: every response is not in the contract, the story sent no request, or the MSW worker is missing |
 
 `SKIP` is shown in the panel only. Storybook still reports the story as passed.
+`PARTIAL` changes the badge only: the report status stays `passed`, so the
+sidebar status, Vitest and the **Run tests** widget treat the story as a plain
+pass.
 
 In test mode `'off'` and for a story with `parameters.mokapi.disable` there is no
 badge. If a story is aborted before it reports, for example because you switch
@@ -283,6 +346,9 @@ Notices appear below the toolbar when the addon can't validate:
 - The Mokapi at `dashboardUrl` has no validation endpoint and must be updated to 0.58.0.
 - Mokapi reports a configuration error, for example an unknown `api`.
 - `parameters.mokapi.test` has an invalid value.
+- `parameters.mokapi.partial` has an invalid value.
+- The Mokapi at `dashboardUrl` doesn't support partial responses and must be
+  updated to 0.60.0. The entries show what Mokapi returned, validated strictly.
 - A validation did not finish in time, see [Failing stories](#failing-stories).
 - The MSW worker is missing from `context.msw`.
 
@@ -400,7 +466,8 @@ A failing result is:
 
 - an invalid response
 - Mokapi is not reachable, or the Mokapi at `dashboardUrl` has no validation endpoint
-- a configuration error, for example an unknown `api` or an invalid `parameters.mokapi.test`
+- a story with partial responses and a Mokapi older than 0.60.0, which ignores the option
+- a configuration error, for example an unknown `api`, an invalid `parameters.mokapi.test` or an invalid `parameters.mokapi.partial`
 - a validation that did not finish within 4 s
 
 These don't count, they only show in the panel: responses that are not in the
@@ -655,6 +722,8 @@ widget row shows the result right after the run.
 The panel shows the result of the story as it does after a validation in the
 preview: badge, headline, counts, notices and entries with their Request /
 Response details. This includes a passed run with its valid entries. A line above the notices says `Result of the last test run.`
+A story with [partial responses](#partial-responses) shows `PARTIAL` and the
+partial line there as well.
 The hint to turn validation on and the line
 `No responses validated since this story was mounted.` don't appear for it. This
 works with validation off in the Storybook UI too, so with the setup above
@@ -730,6 +799,7 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 | `dashboardUrl`      | `string`  | `'http://localhost:8080'` | Mokapi dashboard URL, must be reachable from the browser. A trailing slash is removed |
 | `defaultValidation` | `boolean` | `false`                   | Initial state of the toolbar toggle. `true` starts with validation on and the button highlighted |
 | `defaultTest`       | `'error' \| 'warning' \| 'off'` | `'warning'` | Test mode of all stories, see [Failing stories](#failing-stories) |
+| `defaultPartial`    | `boolean` | `false`                   | Validate the responses of all stories as partial responses, see [Partial responses](#partial-responses). Needs Mokapi 0.60.0 |
 
 ### `parameters.mokapi`
 
@@ -738,6 +808,7 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 | `api`     | `string`  | OpenAPI `info.title` of the story's API. Optional, see [Choosing the API](#choosing-the-api) |
 | `disable` | `boolean` | Sends nothing to Mokapi for this story                                      |
 | `test`    | `'error' \| 'warning' \| 'off'` | Overrides `defaultTest` for this story, see [Failing stories](#failing-stories) |
+| `partial` | `boolean` | Overrides `defaultPartial` for this story, see [Partial responses](#partial-responses) |
 
 ### Global `mokapiValidation`
 
@@ -765,6 +836,7 @@ Invalid options throw an error when Storybook starts:
 - `Mokapi: dashboardUrl must be an HTTP(S) URL.`
 - `Mokapi: defaultValidation must be true or false.`
 - `Mokapi: defaultTest must be 'error', 'warning' or 'off'.`
+- `Mokapi: defaultPartial must be true or false.`
 
 The panel shows these notices. None of them counts in the badge. They don't stop
 the story either, unless the test mode is `'error'` and the notice is a failing
@@ -777,6 +849,8 @@ result, see [Failing stories](#failing-stories):
 | Mokapi's message, for example for an unknown API | `parameters.mokapi.api` names an API that Mokapi doesn't serve. Use the `info.title` of your contract |
 | `Mokapi answered HTTP <status>: <message>` | Any other unexpected answer from Mokapi. Mokapi's message is added if it sent one |
 | `Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.` | A story, component or preview sets an invalid test mode. The story uses `defaultTest` |
+| `Mokapi: parameters.mokapi.partial must be true or false.` | A story, component or preview sets a `partial` that isn't a boolean. Counts as a configuration error. The story uses `defaultPartial` |
+| `The Mokapi at <dashboardUrl> doesn't support partial responses and must be updated to 0.60.0.` | A story with partial responses met a Mokapi older than 0.60.0. It ignores the option and validates strictly. Update Mokapi or set `partial: false` |
 | `Mokapi: could not read the mocked request or response: <error message>` | The addon could not copy the mocked request or response, or could not show the result. Nothing was validated for that request. The error message tells why |
 | `Mokapi validation did not finish within 4 s (<method> <path>).` | MSW or Mokapi did not answer in time. One notice per unfinished request |
 | ``MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.`` | The story has no MSW worker. Use `mswLoader` or set `context.msw` in your own loader |
@@ -833,7 +907,7 @@ validation off, a story without a worker runs without any message.
   Only React projects are tested.
 - A Storybook served over HTTPS can't reach Mokapi on a plain `http://` address, see
   [Static builds and deployment](#static-builds-and-deployment).
-- Requires Mokapi 0.58.0 or newer, see [Requirements](#requirements).
+- Requires Mokapi 0.58.0 or newer, and 0.60.0 for partial responses, see [Requirements](#requirements).
 
 ## License
 

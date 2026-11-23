@@ -305,6 +305,8 @@ const reportHeadline = (page) => page.getByTestId('mokapi-report-headline');
 const reportCounts = (page) => page.getByTestId('mokapi-report-counts');
 // Only test mode off shows the text in the toolbar, the other modes show it as the tooltip of the badge.
 const testModeOffText = (page) => page.getByTestId('mokapi-test-mode');
+const partialText = (page) => page.getByTestId('mokapi-partial');
+const PARTIAL_TEXT = 'Partial responses: missing properties are not checked.';
 const rerunButton = (page) => page.getByTestId('mokapi-rerun');
 const entryDetails = (entry) => entry.getByTestId('mokapi-details');
 const toggleDetails = (entry) => entryDetails(entry).locator('summary').click();
@@ -849,6 +851,33 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.warning);
       await notice(page, "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.").waitFor();
       await assertStoryStaysGreen(page);
+    });
+
+    await scenario('a partial story with missing required properties passes and says that they are not checked', async (page) => {
+      await openValidated(page, 'profile--partial');
+      await showsText(reportBadge(page), 'PARTIAL');
+      // theme.color.positive of the light theme, the color of PASS
+      assert.equal(await backgroundColorOf(reportBadge(page)), 'rgb(102, 191, 60)');
+      await showsText(partialText(page), PARTIAL_TEXT);
+      await entries(page, 'valid').waitFor();
+      assert.equal(await entries(page, 'invalid').count(), 0);
+      await assertStoryStaysGreen(page);
+      await assertSidebarStatus(page, 'profile--partial', 'Success');
+    });
+
+    await scenario('a story with partial false reports the missing required property as invalid', async (page) => {
+      await openValidated(page, 'profile--partial-off');
+      await showsText(reportBadge(page), 'WARN');
+      await entries(page, 'invalid').waitFor();
+      assert.match(await entries(page, 'invalid').textContent(), /required properties are missing: email/);
+      assert.equal(await partialText(page).count(), 0);
+    });
+
+    await scenario('an invalid partial parameter shows a configuration notice', async (page) => {
+      await openValidated(page, 'profile--invalid-partial-parameter');
+      await notice(page, 'Mokapi: parameters.mokapi.partial must be true or false.').waitFor();
+      await showsText(reportBadge(page), 'WARN');
+      assert.equal(await partialText(page).count(), 0);
     });
 
     await scenario('a disabled story shows the toolbar without badge and test mode text', async (page) => {
