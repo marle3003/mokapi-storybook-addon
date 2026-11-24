@@ -73,6 +73,12 @@ export const WithoutWorker = {
   parameters: { msw: { handlers: [profileHandler(jane)] } },
 };
 
+// A disabled story without a worker: the hint must still name `disable`, not the missing worker.
+export const DisabledWithoutWorker = {
+  loaders: [(context: { msw?: unknown }) => { delete context.msw; }],
+  parameters: { mokapi: { disable: true }, msw: { handlers: [profileHandler(jane)] } },
+};
+
 // Stories for partial responses (`parameters.mokapi.partial`). The mock lacks the required `email`.
 const partialProfile = { name: 'Rex' };
 

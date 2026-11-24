@@ -321,6 +321,56 @@ const colorOf = (locator) => locator.evaluate((element) => getComputedStyle(elem
 const backgroundColorOf = (locator) => locator.evaluate((element) => getComputedStyle(element).backgroundColor);
 const entryTime = (entry) => entry.getByTestId('mokapi-entry-time');
 const EMPTY_LIST_TEXT = 'No responses validated since this story was mounted.';
+const DISABLED_HINT_TEXT = 'Validation is disabled for this story with parameters.mokapi.disable.';
+const DOCS_URL = 'https://mokapi.io/docs/integrations/storybook';
+const HELP_LINK_TEXT = 'Learn more about the Mokapi addon';
+const HELP_ICON_LABEL = 'Mokapi addon documentation';
+// The hint replaces toolbar and list; the text is read by test id, so that it is one string across its `<code>`.
+const hintText = (page) => page.getByTestId('mokapi-hint');
+const helpLink = (page) => page.getByRole('link', { name: HELP_LINK_TEXT });
+const helpIcon = (page) => page.getByTestId('mokapi-help');
+const dashboardLink = (page) => page.getByRole('link', { name: 'Open Mokapi dashboard' });
+const fontOf = (locator) => locator.evaluate((element) => {
+  const { fontWeight, fontSize } = getComputedStyle(element);
+  return { fontWeight, fontSize };
+});
+
+// Only the hint is shown: no toolbar with badge or Rerun, no empty-list text, no notice, no dashboard link.
+async function assertOnlyDisabledHint(page) {
+  await showsText(hintText(page), DISABLED_HINT_TEXT);
+  assert.equal(await hintText(page).locator('code').textContent(), 'parameters.mokapi.disable');
+  assert.equal(await rerunButton(page).count(), 0);
+  assert.equal(await reportBadge(page).count(), 0);
+  assert.equal(await page.getByText('No responses validated').count(), 0);
+  assert.equal(await dashboardLink(page).count(), 0);
+}
+
+// The link sits below the hint text, opens the docs overview in a new tab and is the only link of the panel.
+async function assertHelpLinkBelow(page) {
+  const link = helpLink(page);
+  await link.waitFor();
+  assert.equal(await link.getAttribute('href'), DOCS_URL);
+  assert.equal(await link.getAttribute('target'), '_blank');
+  const text = await boxOf(hintText(page));
+  assert.ok((await boxOf(link)).y >= text.y + text.height, 'the help link is below the hint text');
+}
+
+// Text and link together sit in the middle of the panel (2px), on both axes. The panel is the box the hint fills.
+async function assertHintCentered(page) {
+  const text = await boxOf(hintText(page));
+  const link = await boxOf(helpLink(page));
+  const panel = await hintText(page).evaluate((element) => {
+    const { x, y, width, height } = element.parentElement.parentElement.getBoundingClientRect();
+    return { x, y, width, height };
+  });
+  const left = Math.min(text.x, link.x);
+  const right = Math.max(text.x + text.width, link.x + link.width);
+  const top = text.y;
+  const bottom = link.y + link.height;
+  assertSameEdge((left + right) / 2, panel.x + panel.width / 2, 'x of the hint', 2);
+  assertSameEdge((top + bottom) / 2, panel.y + panel.height / 2, 'y of the hint', 2);
+  assert.deepEqual(await fontOf(hintText(page)), { fontWeight: '700', fontSize: '13px' });
+}
 
 // `exact`, because `OK` would also match "Mokapi".
 async function assertBadgeTooltip(trigger, text) {
@@ -369,8 +419,8 @@ const boxOf = async (locator) => {
   return box;
 };
 const rightOf = async (locator) => { const box = await boxOf(locator); return box.x + box.width; };
-const assertSameEdge = (actual, expected, what) =>
-  assert.ok(Math.abs(actual - expected) <= 1, `${what}: Mokapi ${actual}px, addon-vitest ${expected}px`);
+const assertSameEdge = (actual, expected, what, tolerance = 1) =>
+  assert.ok(Math.abs(actual - expected) <= tolerance, `${what}: Mokapi ${actual}px, expected ${expected}px`);
 
 // The Mokapi row has to line up with the Interactions row of addon-vitest: same text x, same button right edge (1px).
 async function assertLaidOutLikeInteractionsRow(page, id) {
@@ -719,7 +769,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await openMokapiPanel(page);
       await assertNothingSent(sent);
       assert.equal(await entries(page).count(), 0);
-      await page.getByText(EMPTY_LIST_TEXT).waitFor();
+      await assertOnlyDisabledHint(page);
     });
 
     await scenario('passthrough responses are not validated', async (page) => {
@@ -729,6 +779,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await openMokapiPanel(page);
       await assertNothingSent(sent);
       assert.equal(await entries(page).count(), 0);
+      await page.getByText(EMPTY_LIST_TEXT).waitFor();
     });
 
     await scenario('switching the story and re-rendering it clear the list', async (page) => {
@@ -890,11 +941,54 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await partialText(page).count(), 0);
     });
 
-    await scenario('a disabled story shows the toolbar without badge and test mode text', async (page) => {
+    await scenario('a disabled story shows only the disable hint, whatever the test mode, and stays green', async (page) => {
       await openValidated(page, 'profile--error-disabled');
       await assertStoryStaysGreen(page);
+      await assertOnlyDisabledHint(page);
       assert.equal(await testModeOffText(page).count(), 0);
-      assert.equal(await reportBadge(page).count(), 0);
+    });
+
+    await scenario('a disabled story shows the disable hint with validation off, not the toggle hint', async (page) => {
+      await openValidated(page, 'profile--disabled', storybook);
+      await assertOnlyDisabledHint(page);
+      assert.equal(await page.getByText(/Turn on validation/).count(), 0);
+    });
+
+    await scenario('a disabled story without a worker shows the disable hint, not the worker notice', async (page) => {
+      await openValidated(page, 'profile--disabled-without-worker');
+      await assertOnlyDisabledHint(page);
+      assert.equal(await notice(page, /MSW worker not found/).count(), 0);
+    });
+
+    await scenario('the disable hint wins over an earlier panel result', async (page) => {
+      await openValidated(page, 'profile--error-invalid');
+      await entries(page, 'invalid').waitFor();
+      await page.locator('[id="profile--error-disabled"]').click();
+      await assertOnlyDisabledHint(page);
+      assert.equal(await entries(page).count(), 0);
+    });
+
+    await scenario('both hints are centered, bold and 13px, with the help link below the text', async (page) => {
+      await openValidated(page, 'profile--disabled');
+      await assertOnlyDisabledHint(page);
+      await assertHelpLinkBelow(page);
+      await assertHintCentered(page);
+
+      await openValidated(page, 'profile--valid', storybook);
+      await showsText(hintText(page), 'Turn on validation with the "Validate with Mokapi" toggle in the toolbar.');
+      await assertHelpLinkBelow(page);
+      await assertHintCentered(page);
+    });
+
+    await scenario('the toolbar of a validated story has a help icon left of the dashboard link', async (page) => {
+      await openValidated(page, 'profile--valid');
+      await entries(page, 'valid').waitFor();
+      const icon = helpIcon(page);
+      assert.equal(await icon.getAttribute('aria-label'), HELP_ICON_LABEL);
+      assert.equal(await icon.getAttribute('href'), DOCS_URL);
+      assert.equal(await icon.getAttribute('target'), '_blank');
+      assert.ok(await rightOf(icon) <= (await boxOf(dashboardLink(page))).x, 'the help icon is left of the dashboard link');
+      assert.equal(await helpLink(page).count(), 0);
     });
 
     await scenario('with validation off the panel shows only the toggle hint, without toolbar and Rerun', async (page) => {
@@ -1571,6 +1665,17 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       // The skipped story has no result of the run: the panel shows what the UI knows, i.e. nothing.
       await page.locator(`[id="${skipped}"]`).click();
       await page.getByText(/Turn on validation/).waitFor();
+      assert.equal(await testRunNote(page).count(), 0);
+    });
+
+    await scenario('the disable hint wins over the result of a test run for the disabled story', async (page) => {
+      const disabled = 'profile--error-disabled';
+      await openValidated(page, disabled);
+      await assertOnlyDisabledHint(page);
+      await emitTestRun(page, disabled);
+      // The run result is in the manager once the sidebar shows its status; the hint stays.
+      await assertSidebarStatus(page, disabled, 'Warning');
+      await assertOnlyDisabledHint(page);
       assert.equal(await testRunNote(page).count(), 0);
     });
 

@@ -63,6 +63,21 @@ const TEST_MODE_TEXTS: Record<TestMode, string> = {
 
 export const testModeText = (mode: TestMode): string => TEST_MODE_TEXTS[mode];
 
+// The panel's hints replace toolbar and list. A disabled story is never validated, so that reason wins over everything.
+export type PanelHint = 'disabled' | 'validation-off';
+
+export function hintOf({ disabled, validationOn, fromTestRun }: { disabled: boolean; validationOn: boolean; fromTestRun?: boolean }): PanelHint | undefined {
+  if (disabled) return 'disabled';
+  return !validationOn && !fromTestRun ? 'validation-off' : undefined;
+}
+
+// The parameter is shown as code, so the text comes in three pieces.
+export const DISABLED_HINT = { before: 'Validation is disabled for this story with ', code: 'parameters.mokapi.disable', after: '.' };
+
+export const DOCS_URL = 'https://mokapi.io/docs/integrations/storybook';
+export const HELP_LINK_TEXT = 'Learn more about the Mokapi addon';
+export const HELP_ICON_LABEL = 'Mokapi addon documentation';
+
 // A PASS of a partial story doesn't mean the mock is complete, so the panel says so.
 export const PARTIAL_TEXT = 'Partial responses: missing properties are not checked.';
 

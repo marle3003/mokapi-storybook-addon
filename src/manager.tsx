@@ -4,7 +4,7 @@ import React, { useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { addons, experimental_getStatusStore, experimental_useStatusStore, types, useGlobals, useStorybookApi, useStorybookState } from 'storybook/manager-api';
 import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDER_PHASE_CHANGED } from 'storybook/internal/core-events';
 import { ActionList, Badge, Form, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
-import { CheckIcon, CircleHollowIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
+import { CheckIcon, CircleHollowIcon, QuestionIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
 import { Global, styled, useTheme } from 'storybook/theming';
 import { initialRemountState, nextRemount, remountIfSelected, type RemountEvent } from './remount.js';
 import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
@@ -14,8 +14,13 @@ import {
   type ContextMenuRow,
   contractCheckboxTooltip,
   countLine,
+  DISABLED_HINT,
+  DOCS_URL,
   formatBody,
   formatTime,
+  HELP_ICON_LABEL,
+  HELP_LINK_TEXT,
+  hintOf,
   isFailingNotice,
   KIND_LABELS,
   methodColor,
@@ -30,6 +35,7 @@ import {
   STATUS_TYPE_ID,
   testModeText,
   type BadgeColor,
+  type PanelHint,
   type ReportBadge,
   widgetRow,
 } from './report.js';
@@ -50,6 +56,7 @@ import {
   type Report,
 } from './results.js';
 import { applyTestRun, forgetStoryRun, overtakeMounts, panelOf, ranStoryIds, readTestRunEvent, releaseOvertaken, settleReport, startValidatingMount, type Mounts, type StoryPanel, type StoryRuns, type TestRunPayload } from './test-run.js';
+import { isDisabled } from './options.js';
 import { toggleState } from './toggle.js';
 import type { ResolvedAddonOptions } from './types.js';
 
@@ -141,7 +148,19 @@ const PanelRoot = styled.div(({ theme }) => ({
   fontSize: theme.typography.size.s1,
 }));
 const PanelScroll = styled(ScrollArea)({ height: '100%' });
-const Hint = styled.p({ margin: 0, padding: 16 });
+// Outside the scroll area, whose content wrapper doesn't stretch, so that the hint can be centered vertically.
+const HintBox = styled.div({
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  height: '100%',
+  boxSizing: 'border-box',
+  padding: 16,
+  textAlign: 'center',
+});
+const HintText = styled.p({ margin: 0, fontWeight: 700, fontSize: '13px' });
 const Title = styled.span({ display: 'inline-flex', gap: 6, alignItems: 'center' });
 const ContextMenuList = styled(ActionList)({ minWidth: 240, padding: 0 });
 // Like addon-vitest's list, so that Contract lines up with its rows. The padding is the one of the box around it.
@@ -420,6 +439,15 @@ function RerunButton() {
   );
 }
 
+// Opens the addon's documentation in a new tab, like the dashboard link.
+function HelpIconButton() {
+  return (
+    <IconButton asChild padding="small" variant="ghost" ariaLabel={HELP_ICON_LABEL} data-testid="mokapi-help">
+      <a href={DOCS_URL} target="_blank" rel="noreferrer"><QuestionIcon /></a>
+    </IconButton>
+  );
+}
+
 function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: string }) {
   const { entries, testMode, report, partial } = state;
   const badge = reportBadge(testMode, report, partial);
@@ -434,6 +462,7 @@ function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: st
       {partial && <ToolbarText data-testid="mokapi-partial">{PARTIAL_TEXT}</ToolbarText>}
       <ToolbarActions>
         <RerunButton />
+        <HelpIconButton />
         {dashboardUrl && <Link href={dashboardUrl} target="_blank" rel="noreferrer">Open Mokapi dashboard</Link>}
       </ToolbarActions>
     </ToolbarRow>
@@ -461,15 +490,37 @@ function PanelFrame({ children }: { children: ReactNode }) {
   return <PanelRoot><PanelScroll vertical>{children}</PanelScroll></PanelRoot>;
 }
 
+const hintContent = (hint: PanelHint): ReactNode =>
+  hint === 'disabled'
+    ? <>{DISABLED_HINT.before}<code>{DISABLED_HINT.code}</code>{DISABLED_HINT.after}</>
+    : `Turn on validation with the "${TOGGLE_NAME}" toggle in the toolbar.`;
+
+// A hint replaces toolbar and list, so the reader of a story who doesn't know the addon finds its documentation here.
+function HintView({ hint }: { hint: PanelHint }) {
+  return (
+    <PanelRoot>
+      <HintBox>
+        <HintText data-testid="mokapi-hint">{hintContent(hint)}</HintText>
+        <Link href={DOCS_URL} target="_blank" rel="noreferrer">{HELP_LINK_TEXT}</Link>
+      </HintBox>
+    </PanelRoot>
+  );
+}
+
 function Panel() {
+  const api = useStorybookApi();
   const [globals] = useGlobals();
   const { selectedPanel, layout } = useStorybookState();
   const state = useResultsOfSelectedStory();
   const dashboardUrl = window.__MOKAPI_PANEL_OPTIONS__?.dashboardUrl;
   if (selectedPanel !== PANEL_ID || !layout.showPanel) return null;
-  if (globals.mokapiValidation !== 'on' && !state.fromTestRun) {
-    return <PanelFrame><Hint>{`Turn on validation with the "${TOGGLE_NAME}" toggle in the toolbar.`}</Hint></PanelFrame>;
-  }
+  // Storybook merges the parameters into the index when the story is prepared, so they're there with validation off and without a worker.
+  const hint = hintOf({
+    disabled: isDisabled(api.getCurrentParameter<{ disable?: unknown } | undefined>('mokapi')),
+    validationOn: globals.mokapiValidation === 'on',
+    fromTestRun: state.fromTestRun,
+  });
+  if (hint) return <HintView hint={hint} />;
   return (
     <PanelFrame>
       <Toolbar state={state} dashboardUrl={dashboardUrl} />

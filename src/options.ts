@@ -11,6 +11,9 @@ export const isPositiveNumber = (value: unknown): value is number =>
 
 export const isTestMode = (value: unknown): value is TestMode => TEST_MODES.includes(value);
 
+// `parameters.mokapi.disable` is truthy-checked, so the validation hook and the panel can't disagree about a story.
+export const isDisabled = (parameters: { disable?: unknown } | undefined): boolean => Boolean(parameters?.disable);
+
 function isHttpUrl(value: string): boolean {
   try {
     return /^https?:$/.test(new URL(value).protocol);

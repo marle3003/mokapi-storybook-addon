@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { resolveOptions } from '../dist/index.js';
+import { isDisabled } from '../dist/options.js';
 import { forgetResults, initialPanelState, invalidCount, reducePanel, rememberResult, resultsOfStory, uiResultOf, validCount } from '../dist/results.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount, remountIfSelected } from '../dist/remount.js';
@@ -14,11 +15,16 @@ import {
   contextMenuRow,
   contractCheckboxTooltip,
   countLine,
+  DISABLED_HINT,
+  DOCS_URL,
   errorMessage,
   formatBody,
   formatTime,
   handlerTimeoutMessage,
   headline,
+  HELP_ICON_LABEL,
+  HELP_LINK_TEXT,
+  hintOf,
   INVALID_TIMEOUT_PARAMETER_MESSAGE,
   isFailingNotice,
   isSkippedReport,
@@ -2852,4 +2858,33 @@ test('isSkippedReport is a passed report without a valid response', () => {
   assert.equal(isSkippedReport({ ...skippedReport, valid: 1 }), false);
   assert.equal(isSkippedReport({ ...warningReport }), false);
   assert.equal(isSkippedReport({ ...skippedReport, valid: undefined }), true);
+});
+
+test('isDisabled is true for a truthy disable parameter only', () => {
+  assert.equal(isDisabled(undefined), false);
+  assert.equal(isDisabled({}), false);
+  assert.equal(isDisabled({ disable: false }), false);
+  assert.equal(isDisabled({ disable: true }), true);
+});
+
+test('hintOf puts a disabled story before every other state', () => {
+  for (const validationOn of [true, false]) {
+    for (const fromTestRun of [true, false]) {
+      assert.equal(hintOf({ disabled: true, validationOn, fromTestRun }), 'disabled');
+    }
+  }
+});
+
+test('hintOf asks for validation only when it is off and no test run result exists', () => {
+  assert.equal(hintOf({ disabled: false, validationOn: false, fromTestRun: false }), 'validation-off');
+  assert.equal(hintOf({ disabled: false, validationOn: false, fromTestRun: true }), undefined);
+  assert.equal(hintOf({ disabled: false, validationOn: true, fromTestRun: false }), undefined);
+  assert.equal(hintOf({ disabled: false, validationOn: true, fromTestRun: true }), undefined);
+});
+
+test('the help texts and the docs URL are the documented ones', () => {
+  assert.equal(DOCS_URL, 'https://mokapi.io/docs/integrations/storybook');
+  assert.equal(HELP_LINK_TEXT, 'Learn more about the Mokapi addon');
+  assert.equal(HELP_ICON_LABEL, 'Mokapi addon documentation');
+  assert.deepEqual(DISABLED_HINT, { before: 'Validation is disabled for this story with ', code: 'parameters.mokapi.disable', after: '.' });
 });

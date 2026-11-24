@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEOUT_MS } from './options.js';
+import { DEFAULT_TIMEOUT_MS, isDisabled } from './options.js';
 import {
   errorMessage,
   handlerTimeoutMessage,
@@ -232,8 +232,8 @@ function observe(worker: MswWorker, options: HookOptions): void {
 // Runs before every story render and never throws: it runs for every story of the project.
 // A mount starts a new Render and a new panel list, a re-render continues the Render of its mount.
 export function validationHook(context: HookContext, options: HookOptions): void {
-  const { api, disable, test, partial: partialParameter, timeout: timeoutParameter } = context.parameters.mokapi ?? {};
-  const validating = context.globals.mokapiValidation === 'on' && !disable;
+  const { api, test, partial: partialParameter, timeout: timeoutParameter } = context.parameters.mokapi ?? {};
+  const validating = context.globals.mokapiValidation === 'on' && !isDisabled(context.parameters.mokapi);
   // A switch of the validation re-renders before the addon remounts: that render must not judge the old results.
   const mounted = context.abortSignal && rendersOfMount.get(context.abortSignal);
   if (mounted?.validating === validating) {
