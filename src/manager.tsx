@@ -113,6 +113,15 @@ function forgetTestRun(storyId: string): void {
   notifySubscribers();
 }
 
+// The story is no longer judged (disabled, or test mode 'off'): its earlier panel and test run results are void, and
+// so is the mount mark of a story that will never report.
+function forgetStoryResults(storyId: string): void {
+  testRuns = forgetStoryRun(testRuns, storyId);
+  lastResults = forgetResults(lastResults, [storyId]);
+  mounts = settleReport(mounts, storyId).mounts;
+  notifySubscribers();
+}
+
 function clearTestRuns(): void {
   testRuns = {};
   lastResults = {};
@@ -546,7 +555,14 @@ addons.register('mokapi', (api) => {
   };
   api.on(PANEL_EVENT, (action: PanelAction) => {
     receive(action);
-    if (action.type === 'render-started' && action.testMode) mounts = startValidatingMount(mounts, action.storyId);
+    if (action.type === 'render-started') {
+      if (action.unjudged) {
+        forgetStoryResults(action.storyId);
+        updateStatuses([[action.storyId, undefined]]);
+      } else if (action.testMode) {
+        mounts = startValidatingMount(mounts, action.storyId);
+      }
+    }
     if (action.type !== 'report') return;
     const settled = settleReport(mounts, action.storyId);
     mounts = settled.mounts;

@@ -233,7 +233,8 @@ function observe(worker: MswWorker, options: HookOptions): void {
 // A mount starts a new Render and a new panel list, a re-render continues the Render of its mount.
 export function validationHook(context: HookContext, options: HookOptions): void {
   const { api, test, partial: partialParameter, timeout: timeoutParameter } = context.parameters.mokapi ?? {};
-  const validating = context.globals.mokapiValidation === 'on' && !isDisabled(context.parameters.mokapi);
+  const disabled = isDisabled(context.parameters.mokapi);
+  const validating = context.globals.mokapiValidation === 'on' && !disabled;
   // A switch of the validation re-renders before the addon remounts: that render must not judge the old results.
   const mounted = context.abortSignal && rendersOfMount.get(context.abortSignal);
   if (mounted?.validating === validating) {
@@ -242,6 +243,7 @@ export function validationHook(context: HookContext, options: HookOptions): void
     return;
   }
   const { mode, invalid } = resolveTestMode(test, options.defaultTest);
+  const unjudged = disabled || mode === 'off';
   const resolvedPartial = resolvePartial(partialParameter, options.defaultPartial);
   const partial = validating && resolvedPartial.partial;
   const resolvedTimeout = resolveTimeout(timeoutParameter, options.defaultTimeout);
@@ -252,8 +254,8 @@ export function validationHook(context: HookContext, options: HookOptions): void
   if (context.abortSignal) rendersOfMount.set(context.abortSignal, render);
   const emit = (action: PanelAction) => announce(render, options.emit, action);
 
-  if (validating || worker !== undefined) {
-    emit({ type: 'render-started', storyId: context.id, renderId: render.renderId, ...(validating && { testMode: mode }), ...(partial && { partial }) });
+  if (validating || worker !== undefined || unjudged) {
+    emit({ type: 'render-started', storyId: context.id, renderId: render.renderId, ...(validating && { testMode: mode }), ...(partial && { partial }), ...(unjudged && { unjudged }) });
   }
   if (validating && invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TEST_PARAMETER_MESSAGE } });
   if (validating && resolvedPartial.invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_PARTIAL_PARAMETER_MESSAGE } });

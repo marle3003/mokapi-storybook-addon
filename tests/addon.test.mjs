@@ -394,6 +394,68 @@ test('hook announces no partial responses with validation off or for a disabled 
   for (const action of panel.actions) assert.equal('partial' in action, false);
 });
 
+// An unjudged mount (disabled, or test mode 'off') tells the manager to forget the story's earlier Mokapi result.
+const startedBy = (context, options) => {
+  const panel = recorder();
+  validationHook(context, options(panel));
+  return panel.actions.filter(({ type }) => type === 'render-started');
+};
+
+test('hook marks the mount of a disabled story as unjudged with validation on and off, with and without a worker', () => {
+  for (const validation of ['on', 'off']) {
+    for (const worker of [fakeWorker(), undefined]) {
+      const started = startedBy(storyContext(worker, { validation, mokapi: { disable: true } }), (panel) => hookOptions(panel));
+      assert.equal(started.length, 1, `validation ${validation}, worker ${worker !== undefined}`);
+      assert.equal(started[0].unjudged, true, `validation ${validation}, worker ${worker !== undefined}`);
+    }
+  }
+});
+
+test('hook marks the mount of a story with test mode off as unjudged, also when defaultTest or the fallback resolves to off', () => {
+  const cases = [
+    ['test: off', { test: 'off' }, 'warning'],
+    ['defaultTest: off', undefined, 'off'],
+    ['invalid test falling back to defaultTest: off', { test: 'strict' }, 'off'],
+  ];
+  for (const [name, mokapi, defaultTest] of cases) {
+    for (const validation of ['on', 'off']) {
+      for (const worker of [fakeWorker(), undefined]) {
+        const started = startedBy(storyContext(worker, { validation, mokapi }), (panel) => hookOptions(panel, defaultTest));
+        assert.equal(started.length, 1, `${name}, validation ${validation}, worker ${worker !== undefined}`);
+        assert.equal(started[0].unjudged, true, `${name}, validation ${validation}, worker ${worker !== undefined}`);
+      }
+    }
+  }
+});
+
+test('hook keeps the test mode off on the unjudged mount while validating', () => {
+  const [started] = startedBy(storyContext(fakeWorker(), { mokapi: { test: 'off' } }), (panel) => hookOptions(panel));
+  assert.equal(started.testMode, 'off');
+  assert.equal(started.unjudged, true);
+});
+
+test('hook marks no mount of a judged story as unjudged', () => {
+  for (const mokapi of [undefined, { test: 'warning' }, { test: 'error' }, { test: 'strict' }]) {
+    for (const validation of ['on', 'off']) {
+      for (const started of startedBy(storyContext(fakeWorker(), { validation, mokapi }), (panel) => hookOptions(panel, 'warning'))) {
+        assert.equal('unjudged' in started, false, `${JSON.stringify(mokapi)}, validation ${validation}`);
+      }
+    }
+  }
+});
+
+test('a re-render of an unjudged mount announces nothing again, a switch of the validation does', () => {
+  const panel = recorder();
+  const worker = fakeWorker();
+  const mounted = testContext(worker, { mokapi: { test: 'off' } });
+  validationHook(mounted, hookOptions(panel));
+  validationHook({ ...mounted }, hookOptions(panel));
+  assert.equal(panel.actions.length, 1);
+
+  validationHook({ ...mounted, globals: { mokapiValidation: 'off' } }, hookOptions(panel));
+  assert.deepEqual(panel.actions.map(({ type, unjudged }) => [type, unjudged]), [['render-started', true], ['render-started', true]]);
+});
+
 test('an invalid partial parameter shows a configuration notice while validating and the story uses defaultPartial', () => {
   const panel = recorder();
   const worker = fakeWorker();
@@ -2069,7 +2131,7 @@ test('without context.msw validation on shows the notice once per render and doe
 test('a disabled story without context.msw shows no notice', () => {
   const panel = recorder();
   validationHook(storyContext(undefined, { mokapi: { disable: true } }), hookOptions(panel));
-  assert.deepEqual(panel.actions, []);
+  assert.deepEqual(panel.actions.map(({ type, unjudged }) => [type, unjudged]), [['render-started', true]]);
 });
 
 const entry = (sequence, status = 'valid') => ({

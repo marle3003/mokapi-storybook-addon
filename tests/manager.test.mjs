@@ -150,3 +150,76 @@ test('a switch does not remount the story when another story was selected before
 
   assert.deepEqual(manager.remounts(), []);
 });
+
+// A mount of a disabled story or of a story in test mode 'off': the preview marks it `unjudged`.
+const startUnjudgedMount = (manager, renderId, storyId = STORY, testMode) =>
+  manager.emitPanel({ type: 'render-started', storyId, renderId, unjudged: true, ...(testMode && { testMode }) });
+
+const warnFromUi = (manager, renderId, storyId = STORY) => {
+  manager.emitPanel({ type: 'render-started', storyId, renderId, testMode: 'warning' });
+  manager.emitPanel({ type: 'report', renderId, storyId, status: 'warning', headline: '1 response does not match the contract.', invalid: 1, valid: 0 });
+};
+
+test('an unjudged mount removes the sidebar status of a warning from the UI', async () => {
+  const manager = await loadManager();
+  warnFromUi(manager, 1);
+  assert.equal(manager.sidebarStatus(STORY), 'status-value:warning');
+
+  startUnjudgedMount(manager, 2);
+
+  assert.equal(manager.sidebarStatus(STORY), undefined);
+});
+
+test('an unjudged mount removes the sidebar status of a warning from a test run', async () => {
+  const manager = await loadManager();
+  manager.emitTestRun(warningRun());
+  assert.equal(manager.sidebarStatus(STORY), 'status-value:warning');
+
+  startUnjudgedMount(manager, 1, STORY, 'off');
+
+  assert.equal(manager.sidebarStatus(STORY), undefined);
+});
+
+test('an unjudged mount leaves the sidebar status of another story', async () => {
+  const manager = await loadManager();
+  warnFromUi(manager, 1, 'a--one');
+  warnFromUi(manager, 2, 'a--two');
+
+  startUnjudgedMount(manager, 3, 'a--one');
+
+  assert.equal(manager.sidebarStatus('a--one'), undefined);
+  assert.equal(manager.sidebarStatus('a--two'), 'status-value:warning');
+});
+
+test('a story judged after an unjudged mount gets its status again', async () => {
+  const manager = await loadManager();
+  warnFromUi(manager, 1);
+  startUnjudgedMount(manager, 2, STORY, 'off');
+
+  warnFromUi(manager, 3);
+
+  assert.equal(manager.sidebarStatus(STORY), 'status-value:warning');
+});
+
+test('a report of an ordinary story still sets its status next to an unjudged one', async () => {
+  const manager = await loadManager();
+  startUnjudgedMount(manager, 1, 'a--one');
+
+  warnFromUi(manager, 2, 'a--two');
+
+  assert.equal(manager.sidebarStatus('a--one'), undefined);
+  assert.equal(manager.sidebarStatus('a--two'), 'status-value:warning');
+});
+
+test('a test run after an unjudged mount leaves the story without status', async () => {
+  const manager = await loadManager();
+  warnFromUi(manager, 1);
+  startUnjudgedMount(manager, 2, STORY, 'off');
+
+  manager.emitTestRun({
+    type: 'test-run-completed',
+    payload: { reports: {}, componentTestStatuses: [{ storyId: STORY, typeId: 'storybook/component-test', value: 'status-value:success', title: 'Component tests', description: '' }] },
+  });
+
+  assert.equal(manager.sidebarStatus(STORY), undefined);
+});

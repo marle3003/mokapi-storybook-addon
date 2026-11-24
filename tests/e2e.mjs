@@ -1780,6 +1780,69 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertSidebarStatus(page, cached, 'Warning');
     });
 
+    // Editing a story to `disable: true` or `test: 'off'` mounts it again with the new configuration (HMR). The story
+    // `Reconfigurable` reads its configuration from the URL of the preview, so the scenarios reload only the preview
+    // iframe: the manager keeps its state, as it does with HMR, and the mount is the only thing that changes.
+    const reconfigurable = 'profile--reconfigurable';
+    const reloadPreviewWith = async (page, configuration, validation) => {
+      await page.frame({ name: 'storybook-preview-iframe' })
+        .goto(`${validatingStorybook.url}/iframe.html?id=${reconfigurable}&viewMode=story&globals=mokapiValidation:${validation}&mokapi=${configuration}`);
+      await waitForFinishedRender(page);
+      // The handler answers only if MSW started again in the new document.
+      await profileInPreview(page).getByText('Jane Doe').waitFor();
+    };
+    const earlierResults = {
+      'UI result': async () => {},
+      'test run': async (page) => {
+        await emitTestRunEvent(page, completedRun(
+          { [reconfigurable]: mokapiRunReport('warning', [runEntry('invalid', [{ location: 'response.body', message: 'required properties are missing: email' }])]) },
+          [componentTestStatus(reconfigurable, 'status-value:success')],
+        ));
+        await showsText(testRunNote(page), 'Result of the last test run.');
+      },
+    };
+
+    for (const source of Object.keys(earlierResults)) {
+      for (const configuration of ['disable', 'off']) {
+        for (const validation of ['on', 'off']) {
+          await scenario(`a story with an earlier ${source} has no Mokapi result once it is mounted with ${configuration} and validation ${validation}`, async (page) => {
+            await openWithClearedStatuses(page, reconfigurable);
+            await showsText(reportBadge(page), 'WARN');
+            await assertSidebarStatus(page, reconfigurable, 'Warning');
+            await earlierResults[source](page);
+            if (validation === 'off') {
+              // Switching the toggle clears nothing.
+              await waitForFinishedRender(page);
+              await switchValidationAndWait(page, 'off');
+              await assertSidebarStatus(page, reconfigurable, 'Warning');
+            }
+
+            await reloadPreviewWith(page, configuration, validation);
+
+            await assertNoSidebarStatus(page, reconfigurable);
+            await expandTestingModule(page);
+            const widgetRow = widgetContractButton(page, 'Mokapi: No result');
+            await widgetRow.waitFor({ timeout: 3000 });
+            assert.equal(await widgetRow.isDisabled(), true);
+            const menuRow = await contractRowOf(page, reconfigurable, 'Mokapi: No result');
+            await menuRow.waitFor({ timeout: 3000 });
+            assert.equal(await menuRow.isDisabled(), true);
+            assert.equal(await testRunNote(page).count(), 0);
+            if (configuration === 'disable') {
+              await assertOnlyDisabledHint(page);
+            } else if (validation === 'on') {
+              await showsText(testModeOffText(page), TEST_MODE_TEXTS.off);
+              await entries(page, 'invalid').waitFor();
+              assert.equal(await reportBadge(page).count(), 0);
+            } else {
+              await page.getByText(/Turn on validation/).waitFor();
+              assert.equal(await reportBadge(page).count(), 0);
+            }
+          });
+        }
+      }
+    }
+
     await scenario('with test error a response that does not match the contract fails the story', async (page) => {
       await openValidated(page, 'profile--error-invalid');
       await assertStoryFails(page, /^1 response does not match the contract\.$/);

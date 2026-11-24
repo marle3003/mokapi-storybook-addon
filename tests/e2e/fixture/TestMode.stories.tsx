@@ -54,6 +54,16 @@ export const OffInvalid = {
   parameters: { mokapi: { test: 'off' }, msw: { handlers: [profileHandler(invalidProfile)] } },
 };
 
+// A story whose configuration changes while Storybook keeps running, as after editing the story file with HMR. The
+// parameters come from the preview's own URL (`?mokapi=disable` or `?mokapi=off`) when the module is evaluated, so a
+// scenario can reload only the preview iframe and keep the manager's state.
+const reconfiguration = new URLSearchParams(location.search).get('mokapi');
+const reconfiguredMokapi = reconfiguration === 'disable' ? { disable: true } : { test: reconfiguration === 'off' ? 'off' : 'warning' };
+
+export const Reconfigurable = {
+  parameters: { mokapi: reconfiguredMokapi, msw: { handlers: [profileHandler(invalidProfile)] } },
+};
+
 // A valid response and a request the contract does not know: neither counts as failing.
 export const ErrorValid = {
   render: () => (

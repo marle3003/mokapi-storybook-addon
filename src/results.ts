@@ -51,9 +51,10 @@ export interface Report {
 
 // renderId is unique per mount of a story (a re-render keeps it), so late answers of an earlier mount can be recognized.
 // The report names its story, because the sidebar status is set for it and stories on a Docs page count their renderIds each.
-// testMode is set while the render is validated, partial when it validates with partial responses.
+// testMode is set while the render is validated, partial when it validates with partial responses. unjudged marks a
+// mount of a disabled story or of a story in test mode 'off': the manager forgets the earlier Mokapi result of the story.
 export type PanelAction =
-  | { type: 'render-started'; storyId: string; renderId: number; testMode?: TestMode; partial?: true }
+  | { type: 'render-started'; storyId: string; renderId: number; testMode?: TestMode; partial?: true; unjudged?: true }
   | { type: 'result'; renderId: number; entry: Entry }
   | { type: 'notice'; renderId: number; notice: Notice }
   | ({ type: 'report'; renderId: number; storyId: string } & Report);
