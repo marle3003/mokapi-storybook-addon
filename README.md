@@ -14,7 +14,7 @@ in the story when a mock drifts from the API.
 - **Failing stories:** optionally, a story fails when its responses don't match the contract, so CI catches contract drift. In Storybook the story gets an error or warning icon in the sidebar.
 - **No change for the component:** it gets the MSW response unchanged and without delay.
 
-![Storybook with Mokapi validation switched on: the story's MSW mock is missing the required email property, so the Mokapi panel lists the response as invalid with the error and the tab shows a badge](docs/screenshot.png)
+![Storybook with Mokapi validation switched on: the story's MSW mock is missing the required email property, so the Mokapi panel lists the response as invalid with the error and the tab shows a badge](https://raw.githubusercontent.com/marle3003/mokapi-storybook-addon/main/docs/screenshot.png)
 
 The full documentation is on [mokapi.io](https://mokapi.io/docs/integrations/storybook).
 

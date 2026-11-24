@@ -75,6 +75,6 @@
   "storybook": {
     "displayName": "Mokapi",
     "supportedFrameworks": ["react"],
-    "icon": "https://mokapi.io/icon-180.png"
+    "icon": "https://mokapi.io/logo.svg"
   }
 }
