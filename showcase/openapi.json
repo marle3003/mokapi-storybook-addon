@@ -1,0 +1,106 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Shop API", "version": "1.0.0" },
+  "paths": {
+    "/orders": {
+      "get": {
+        "summary": "List orders",
+        "responses": {
+          "200": {
+            "description": "A page of orders",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderPage" } } }
+          }
+        }
+      },
+      "post": {
+        "summary": "Place an order",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewOrder" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "The new order",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Order" } } }
+          }
+        }
+      }
+    },
+    "/orders/{id}": {
+      "get": {
+        "summary": "Get an order",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The order",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Order" } } }
+          },
+          "404": {
+            "description": "No order with this id",
+            "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Order": {
+        "type": "object",
+        "required": ["id", "status", "customer", "items"],
+        "properties": {
+          "id": { "type": "integer" },
+          "status": { "type": "string", "enum": ["pending", "in_transit", "delivered"] },
+          "customer": {
+            "type": "object",
+            "required": ["firstName", "lastName"],
+            "properties": {
+              "firstName": { "type": "string" },
+              "lastName": { "type": "string" }
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "quantity", "price"],
+              "properties": {
+                "name": { "type": "string" },
+                "quantity": { "type": "integer" },
+                "price": { "type": "number" }
+              }
+            }
+          },
+          "currency": { "type": "string" }
+        }
+      },
+      "OrderPage": {
+        "type": "object",
+        "required": ["items", "total"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } },
+          "total": { "type": "integer" }
+        }
+      },
+      "NewOrder": {
+        "type": "object",
+        "required": ["quantity", "currency"],
+        "properties": {
+          "productId": { "type": "integer" },
+          "quantity": { "type": "integer" },
+          "currency": { "type": "string" }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": ["title", "detail"],
+        "properties": {
+          "title": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -14,7 +14,7 @@ in the story when a mock drifts from the API.
 - **Failing stories:** optionally, a story fails when its responses don't match the contract, so CI catches contract drift. In Storybook the story gets an error or warning icon in the sidebar.
 - **No change for the component:** it gets the MSW response unchanged and without delay.
 
-![Storybook with Mokapi validation switched on: the story's MSW mock is missing the required email property, so the Mokapi panel lists the response as invalid with the error and the tab shows a badge](https://raw.githubusercontent.com/marle3003/mokapi-storybook-addon/main/docs/screenshot.png)
+![The Enum changed story of a shop order detail with the Mokapi panel open: the mock returns the status shipped, which is not in the contract's enum, so the panel shows a WARN result with Mokapi's error message](https://raw.githubusercontent.com/marle3003/mokapi-storybook-addon/main/docs/screenshot.png)
 
 The full documentation is on [mokapi.io](https://mokapi.io/docs/integrations/storybook).
 
@@ -89,18 +89,24 @@ reads the worker from there.
 Stories stay plain MSW:
 
 ```ts
-// src/Profile.stories.ts
+// src/Orders.stories.ts
 import { http, HttpResponse } from 'msw';
-import { Profile } from './Profile';
+import { OrderDetail } from './OrderDetail';
 
-export default { title: 'Profile', component: Profile };
+export default { title: 'Orders', component: OrderDetail };
 
 export const Valid = {
   parameters: {
     msw: {
       handlers: [
-        http.get('/api/profile', () =>
-          HttpResponse.json({ name: 'Jane Doe', email: 'jane@example.com' }),
+        http.get('/orders/1', () =>
+          HttpResponse.json({
+            id: 1,
+            status: 'in_transit',
+            customer: { firstName: 'Jane', lastName: 'Doe' },
+            items: [{ name: 'Espresso machine', quantity: 1, price: 249.9 }],
+            currency: 'CHF',
+          }),
         ),
       ],
     },

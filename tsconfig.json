@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node", "react", "vite/client"]
   },
-  "include": ["src", "tests/types.ts"]
+  "include": ["src", "tests/types.ts", "showcase", "showcase/.storybook/*.ts"]
 }

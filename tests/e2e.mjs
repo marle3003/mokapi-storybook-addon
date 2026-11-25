@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout } from 'node:timers/promises';
 import test from 'node:test';
 import { chromium } from 'playwright';
+import { mokapiBinary, stopProcess, unusedPorts } from '../scripts/processes.mjs';
 
 const fixtureDirectory = fileURLToPath(new URL('./e2e/fixture/', import.meta.url));
 const require = createRequire(import.meta.url);
@@ -24,26 +24,6 @@ const TOGGLE_TOOLTIPS = {
   on: 'Mokapi validation is on. Click to turn off.',
   off: 'Mokapi validation is off. Click to turn on.',
 };
-
-// Returns count distinct free ports. All servers stay open until every port is
-// allocated, otherwise the OS may hand out the same port twice.
-async function unusedPorts(count) {
-  const servers = [];
-  try {
-    for (let i = 0; i < count; i++) {
-      const server = createServer();
-      servers.push(server);
-      await new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(0, '127.0.0.1', resolve);
-      });
-    }
-    return servers.map((server) => server.address().port);
-  } finally {
-    await Promise.all(servers.filter((server) => server.listening).map((server) =>
-      new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
-  }
-}
 
 const mokapiConfig = (dashboardPort, filename) => `api:
   port: ${dashboardPort}
@@ -69,27 +49,6 @@ async function eventually(assertion, timeout = 15000) {
       await setTimeout(100);
     }
   }
-}
-
-// MOKAPI_BIN overrides the go-mokapi binary, e.g. for a local Mokapi build.
-function mokapiBinary() {
-  if (process.env.MOKAPI_BIN) return process.env.MOKAPI_BIN;
-  const mokapiRequire = createRequire(require.resolve('go-mokapi/package.json'));
-  return mokapiRequire(`@go-mokapi/${process.platform}-${process.arch}`);
-}
-
-const STOP_GRACE_MS = 5000;
-
-// SIGTERM, then SIGKILL after the grace period. The timer is cancelled when the process exits,
-// so it doesn't keep the event loop alive. SIGKILL is sent in any case, because a Storybook
-// leader can exit on SIGTERM while other processes of its group still hold the port.
-async function stopProcess(stopped, kill) {
-  kill('SIGTERM');
-  const grace = new AbortController();
-  await Promise.race([stopped, setTimeout(STOP_GRACE_MS, undefined, { signal: grace.signal })]);
-  grace.abort();
-  kill('SIGKILL');
-  await stopped;
 }
 
 // Starts Mokapi in directory and waits until isReady() passes, i.e. the contract is loaded.

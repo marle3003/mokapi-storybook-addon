@@ -3,8 +3,7 @@ import { delay, http, HttpResponse, passthrough } from 'msw';
 import { jane, profileHandler, userHandler } from './handlers';
 import { Profile } from './Profile';
 
-// Same title as Profile.stories.tsx, so the ids are profile--error-invalid etc. The file is left out of
-// Storybook when MOKAPI_SCREENSHOT is set (.storybook/main.ts).
+// Same title as Profile.stories.tsx, so the ids are profile--error-invalid etc.
 export default { title: 'Profile', component: Profile };
 
 // Stories for the test mode (`parameters.mokapi.test`). The name tells the mode and what the story does.

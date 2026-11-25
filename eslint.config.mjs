@@ -7,7 +7,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.{ts,tsx}', 'tests/**/*.{js,mjs,ts,tsx}', 'scripts/**/*.mjs'],
+    files: ['src/**/*.{ts,tsx}', 'tests/**/*.{js,mjs,ts,tsx}', 'scripts/**/*.mjs', 'showcase/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
     },
