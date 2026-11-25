@@ -9,9 +9,13 @@ declare const __MOKAPI_STORYBOOK_OPTIONS__: ResolvedAddonOptions | undefined;
 
 const options = resolveOptions(typeof __MOKAPI_STORYBOOK_OPTIONS__ === 'undefined' ? undefined : __MOKAPI_STORYBOOK_OPTIONS__);
 
-// No `globalTypes`: Storybook would render its own dropdown for the global. The toggle is a manager tool,
-// and `initialGlobals` is enough for `updateGlobals` and the URL to accept `mokapiValidation`.
-export const initialGlobals = { mokapiValidation: options.defaultValidation ? 'on' : 'off' };
+// No `globalTypes`: Storybook would render its own dropdown for the globals. The toggle is a manager tool,
+// and `initialGlobals` is enough for `updateGlobals`, the URL and `storybookTest({ initialGlobals })` to accept
+// `mokapiValidation` and `mokapiTest`.
+export const initialGlobals = {
+  mokapiValidation: options.defaultValidation ? 'on' : 'off',
+  mokapiTest: options.defaultTest,
+};
 
 const hookOptions = (): HookOptions => ({
   emit: (action: PanelAction) => addons.getChannel().emit(PANEL_EVENT, action),

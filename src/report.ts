@@ -19,6 +19,7 @@ export function operationUrl(dashboardUrl: string, { api, method, path }: Operat
 }
 
 export const INVALID_TEST_PARAMETER_MESSAGE = "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.";
+export const INVALID_TEST_GLOBAL_MESSAGE = "Mokapi: global mokapiTest must be 'error', 'warning' or 'off'.";
 export const INVALID_PARTIAL_PARAMETER_MESSAGE = 'Mokapi: parameters.mokapi.partial must be true or false.';
 
 export const INVALID_TIMEOUT_PARAMETER_MESSAGE = 'Mokapi: parameters.mokapi.timeout must be a positive number.';
@@ -37,10 +38,16 @@ export const timeoutMessage = (request: string, timeoutMs: number): string =>
 export const handlerTimeoutMessage = (request: string, timeoutMs: number): string =>
   `No response from the MSW handler within ${seconds(timeoutMs)} (${request}), not validated. If the response is delayed on purpose, increase ${LIMIT_OPTIONS}.`;
 
-// An invalid value falls back to the project default; the caller reports it as configuration error.
-export function resolveTestMode(parameter: unknown, defaultTest: TestMode): { mode: TestMode; invalid: boolean } {
-  if (parameter === undefined) return { mode: defaultTest, invalid: false };
-  return isTestMode(parameter) ? { mode: parameter, invalid: false } : { mode: defaultTest, invalid: true };
+// The parameter wins over the global, the global over the project default. An invalid parameter falls back to the
+// global, an invalid global to the project default; the caller reports each as configuration error.
+// An undefined global (a portable story without the preview annotation) counts as unset.
+export function resolveTestMode(parameter: unknown, global: unknown, defaultTest: TestMode): { mode: TestMode; invalid: boolean; globalInvalid: boolean } {
+  const globalMode = isTestMode(global) ? global : defaultTest;
+  return {
+    mode: isTestMode(parameter) ? parameter : globalMode,
+    invalid: parameter !== undefined && !isTestMode(parameter),
+    globalInvalid: global !== undefined && !isTestMode(global),
+  };
 }
 
 // An invalid value falls back to the project default; the caller reports it as configuration error.

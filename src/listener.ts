@@ -4,6 +4,7 @@ import {
   handlerTimeoutMessage,
   headline,
   INVALID_PARTIAL_PARAMETER_MESSAGE,
+  INVALID_TEST_GLOBAL_MESSAGE,
   INVALID_TEST_PARAMETER_MESSAGE,
   INVALID_TIMEOUT_PARAMETER_MESSAGE,
   operationUrl,
@@ -244,7 +245,7 @@ export function validationHook(context: HookContext, options: HookOptions): void
     rendersOfContext.set(context, mounted);
     return;
   }
-  const { mode, invalid } = resolveTestMode(test, options.defaultTest);
+  const { mode, invalid, globalInvalid } = resolveTestMode(test, context.globals.mokapiTest, options.defaultTest);
   const unjudged = disabled || mode === 'off';
   const resolvedPartial = resolvePartial(partialParameter, options.defaultPartial);
   const partial = validating && resolvedPartial.partial;
@@ -260,6 +261,7 @@ export function validationHook(context: HookContext, options: HookOptions): void
     emit({ type: 'render-started', storyId: render.storyId, renderId: render.renderId, ...(validating && { testMode: mode }), ...(partial && { partial }), ...(unjudged && { unjudged }) });
   }
   if (validating && invalid) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TEST_PARAMETER_MESSAGE } });
+  if (validating && globalInvalid) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TEST_GLOBAL_MESSAGE } });
   if (validating && resolvedPartial.invalid) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_PARTIAL_PARAMETER_MESSAGE } });
   if (validating && resolvedTimeout.invalid) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TIMEOUT_PARAMETER_MESSAGE } });
   if (worker !== undefined) return observe(worker, options);

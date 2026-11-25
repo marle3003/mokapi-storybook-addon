@@ -169,8 +169,8 @@ async function switchValidationAndWait(page, state) {
 }
 
 // Opens a story or docs page like a Storybook user and optionally switches validation on.
-async function openStory(page, storybookUrl, { id, docs = false, validation = false, layout = '' }) {
-  await page.goto(`${storybookUrl}/?path=/${docs ? 'docs' : 'story'}/${id}${layout}`);
+async function openStory(page, storybookUrl, { id, docs = false, validation = false, layout = '', globals = '' }) {
+  await page.goto(`${storybookUrl}/?path=/${docs ? 'docs' : 'story'}/${id}${layout}${globals && `&globals=${globals}`}`);
   // The toggle is shown in story view only.
   if (!docs) await toggleButton(page).waitFor();
   if (validation) {
@@ -2084,6 +2084,37 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await errorDisplay(story).count(), 0);
     });
 
+    // The URL sets the global `mokapiTest` for a fresh mount, like `storybookTest({ initialGlobals })` does for Vitest.
+    const openWithTestGlobal = async (page, id, test) => {
+      await openStory(page, validatingStorybook.url, { id, globals: `mokapiTest:${test}` });
+      await openMokapiPanel(page);
+    };
+
+    await scenario('the global mokapiTest error fails a story without its own test parameter', async (page) => {
+      await openWithTestGlobal(page, 'profile--invalid', 'error');
+      await assertStoryFails(page, INVALID_HEADLINE);
+      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
+    });
+
+    await scenario('the global mokapiTest off leaves a story without its own test parameter unjudged', async (page) => {
+      await openWithTestGlobal(page, 'profile--invalid', 'off');
+      await showsText(testModeOffText(page), TEST_MODE_TEXTS.off);
+      await entries(page, 'invalid').waitFor();
+      assert.equal(await reportBadge(page).count(), 0);
+      await assertStoryStaysGreen(page);
+    });
+
+    await scenario('the test parameter wins over the global mokapiTest', async (page) => {
+      await openWithTestGlobal(page, 'profile--error-invalid', 'warning');
+      await assertStoryFails(page, INVALID_HEADLINE);
+    });
+
+    await scenario('an invalid global mokapiTest falls back to defaultTest and shows a configuration notice', async (page) => {
+      await openWithTestGlobal(page, 'profile--invalid', 'strict');
+      await notice(page, "Mokapi: global mokapiTest must be 'error', 'warning' or 'off'.").waitFor();
+      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.warning);
+    });
+
     await t.test('Vitest fails stories with contract errors', { timeout: 180000 }, async () => {
       const storyNames = ['ErrorInvalid', 'ErrorNeverAnswers', 'ErrorValid', 'WarningInvalid', 'OffInvalid', 'AfterEachOrder'];
       const story = await runStoriesWithVitest(
@@ -2097,6 +2128,17 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       // A response that never comes is skipped. Vitest's own timeout would say "Test timed out", so this also shows
       // that the addon's limit (4 s) fits into the default.
       for (const name of ['ErrorNeverAnswers', 'ErrorValid', 'WarningInvalid', 'OffInvalid', 'AfterEachOrder']) story(name).expect('passed');
+    });
+
+    await t.test('Vitest takes the test mode from initialGlobals of storybookTest', { timeout: 180000 }, async () => {
+      const story = await runStoriesWithVitest(
+        { MOKAPI_DASHBOARD: dashboard, MOKAPI_DEFAULT_VALIDATION: 'true', MOKAPI_DEFAULT_TEST: 'error', MOKAPI_VITEST_TEST: 'warning' },
+        join(directory, 'vitest-test-global.json'),
+        ['Invalid', 'ErrorInvalid'],
+      );
+      // defaultTest is error, the global warning: a story without a test parameter passes, its own parameter still wins.
+      story('Invalid').expect('passed');
+      story('ErrorInvalid').expect('failed');
     });
 
     await scenario('defaultTest error fails a story without its own test parameter', async (page) => {

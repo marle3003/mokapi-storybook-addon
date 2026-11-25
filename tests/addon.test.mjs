@@ -299,10 +299,10 @@ function fakeWorker() {
   };
 }
 
-const storyContext = (worker, { id = 'profile--valid', validation = 'on', mokapi } = {}) => ({
+const storyContext = (worker, { id = 'profile--valid', validation = 'on', mokapi, test } = {}) => ({
   id,
   msw: worker,
-  globals: { mokapiValidation: validation },
+  globals: { mokapiValidation: validation, ...(test !== undefined && { mokapiTest: test }) },
   parameters: mokapi === undefined ? {} : { mokapi },
 });
 
@@ -671,13 +671,19 @@ const panelNotice = (kind, message = `${kind} message`) => ({ kind, message });
 const escapeForRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const stateOf = (entries = [], notices = []) => ({ ...initialPanelState, entries, notices });
 
-test('the test mode of a story is its parameter, an invalid parameter falls back to the default and is flagged', () => {
-  assert.deepEqual(resolveTestMode(undefined, 'warning'), { mode: 'warning', invalid: false });
-  assert.deepEqual(resolveTestMode('error', 'warning'), { mode: 'error', invalid: false });
-  assert.deepEqual(resolveTestMode('off', 'error'), { mode: 'off', invalid: false });
-  assert.deepEqual(resolveTestMode('strict', 'error'), { mode: 'error', invalid: true });
-  assert.deepEqual(resolveTestMode(true, 'off'), { mode: 'off', invalid: true });
-  assert.deepEqual(resolveTestMode('todo', 'error'), { mode: 'error', invalid: true });
+test('the test mode of a story is its parameter, then the global, then defaultTest; invalid values fall back and are flagged', () => {
+  const resolved = (mode, invalid = false, globalInvalid = false) => ({ mode, invalid, globalInvalid });
+  assert.deepEqual(resolveTestMode(undefined, 'warning', 'warning'), resolved('warning'));
+  assert.deepEqual(resolveTestMode(undefined, 'off', 'error'), resolved('off'));
+  assert.deepEqual(resolveTestMode('error', 'warning', 'warning'), resolved('error'));
+  assert.deepEqual(resolveTestMode('off', 'warning', 'error'), resolved('off'));
+  assert.deepEqual(resolveTestMode('strict', 'warning', 'error'), resolved('warning', true));
+  assert.deepEqual(resolveTestMode(true, 'off', 'error'), resolved('off', true));
+  assert.deepEqual(resolveTestMode(undefined, 'strict', 'error'), resolved('error', false, true));
+  assert.deepEqual(resolveTestMode('off', 'strict', 'error'), resolved('off', false, true));
+  assert.deepEqual(resolveTestMode('todo', 'strict', 'error'), resolved('error', true, true));
+  // A portable story without the preview annotation has no global: that counts as unset.
+  assert.deepEqual(resolveTestMode(undefined, undefined, 'error'), resolved('error'));
 });
 
 test('the panel explains what each test mode does', () => {
@@ -2179,6 +2185,67 @@ test('an invalid test parameter is a configuration error and the story uses defa
   assert.equal(warning.reports[0].status, 'warning');
 });
 
+const INVALID_TEST_GLOBAL = "Mokapi: global mokapiTest must be 'error', 'warning' or 'off'.";
+
+// Runs beforeEach and afterEach of one invalid response and returns how the story ended.
+async function runInvalidStoryWith(t, options, defaultTest) {
+  underVitest(t);
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
+  const panel = recorder();
+  const worker = fakeWorker();
+  const context = testContext(worker, options);
+  validationHook(context, hookOptions(panel, defaultTest));
+  worker.started(getProfile());
+  const finished = testHook(context, hookOptions(panel, defaultTest));
+  worker.mocked(getProfile(), jsonResponse());
+  return { panel, context, finished };
+}
+
+test('the global mokapiTest replaces defaultTest for a story without a test parameter', async (t) => {
+  const { context, finished } = await runInvalidStoryWith(t, { test: 'warning' }, 'error');
+  await finished;
+  assert.equal(context.reports[0].status, 'warning');
+  assert.equal(context.reports[0].result.testMode, 'warning');
+});
+
+test('a test parameter wins over the global mokapiTest', async (t) => {
+  const { context, finished } = await runInvalidStoryWith(t, { test: 'warning', mokapi: { test: 'error' } }, 'warning');
+  await assert.rejects(finished, /^MokapiContractError: /);
+  assert.equal(context.reports[0].status, 'failed');
+});
+
+test('an invalid test parameter falls back to the global mokapiTest and keeps its own notice', async (t) => {
+  const { panel, context, finished } = await runInvalidStoryWith(t, { test: 'off', mokapi: { test: 'strict' } }, 'error');
+  assert.equal(await finished, undefined);
+  assert.deepEqual(context.reports, []);
+  assert.equal(panel.actions[0].unjudged, true);
+  assert.deepEqual(panel.actions.filter(({ type }) => type === 'notice').map(({ notice }) => [notice.kind, notice.message]), [
+    ['config-error', "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'."],
+  ]);
+});
+
+test('an invalid global mokapiTest is a configuration error and the story uses defaultTest', async (t) => {
+  const { panel, context, finished } = await runInvalidStoryWith(t, { test: 'strict' }, 'error');
+  assert.equal(panel.actions[0].testMode, 'error');
+  assert.deepEqual(panel.actions.slice(1, 2).map(({ type, notice }) => [type, notice.kind, notice.message]), [['notice', 'config-error', INVALID_TEST_GLOBAL]]);
+  await assert.rejects(finished, /^MokapiContractError: /);
+  assert.equal(context.reports[0].status, 'failed');
+});
+
+test('an invalid global mokapiTest is reported for a story with a valid test parameter too', () => {
+  const panel = recorder();
+  validationHook(storyContext(fakeWorker(), { test: 'strict', mokapi: { test: 'off' } }), hookOptions(panel));
+  assert.deepEqual(panel.actions.filter(({ type }) => type === 'notice').map(({ notice }) => notice.message), [INVALID_TEST_GLOBAL]);
+});
+
+test('an invalid global mokapiTest is not reported with validation off or for a disabled story', () => {
+  for (const options of [{ validation: 'off' }, { mokapi: { disable: true } }]) {
+    const panel = recorder();
+    validationHook(storyContext(fakeWorker(), { ...options, test: 'strict' }), hookOptions(panel));
+    assert.deepEqual(panel.actions.filter(({ type }) => type === 'notice'), []);
+  }
+});
+
 test('afterEach adds no report with validation off, for a disabled story or in off mode and never fails then', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => Response.json(answers.invalid));
   for (const options of [
@@ -2367,11 +2434,11 @@ test('panel shows the results of the selected story only', () => {
   assert.deepEqual(resultsOfStory(state, 'a--two'), initialPanelState);
 });
 
-test('preview starts with the value of defaultValidation and renders no Storybook dropdown', async () => {
+test('preview starts with the values of defaultValidation and defaultTest and renders no Storybook dropdown', async () => {
   // Vite defines this constant at build time; defaultValidation true shows that it is read.
   globalThis.__MOKAPI_STORYBOOK_OPTIONS__ = { dashboardUrl: 'http://localhost:9090', defaultValidation: true };
   const { globalTypes, initialGlobals } = await import('../dist/preview.js');
-  assert.deepEqual(initialGlobals, { mokapiValidation: 'on' });
+  assert.deepEqual(initialGlobals, { mokapiValidation: 'on', mokapiTest: 'warning' });
   // A globalType with `toolbar` would make Storybook render its own dropdown next to the manager's toggle.
   assert.equal(globalTypes, undefined);
 });

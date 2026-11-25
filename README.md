@@ -146,7 +146,7 @@ Set in `.storybook/main.ts`. Restart Storybook after changing them.
 |-----------|-----------|-----------------------------------------------------------------------------|
 | `api`     | `string`  | OpenAPI `info.title` of the story's API. Optional, see [Choosing the API](https://mokapi.io/docs/integrations/storybook/usage#choosing-the-api) |
 | `disable` | `boolean` | Sends nothing to Mokapi for this story                                      |
-| `test`    | `'error' \| 'warning' \| 'off'` | Overrides `defaultTest` for this story, see [Failing stories](https://mokapi.io/docs/integrations/storybook/failing-stories) |
+| `test`    | `'error' \| 'warning' \| 'off'` | Overrides `defaultTest` and the global `mokapiTest` for this story, see [Failing stories](https://mokapi.io/docs/integrations/storybook/failing-stories) |
 | `partial` | `boolean` | Overrides `defaultPartial` for this story, see [Partial responses](https://mokapi.io/docs/integrations/storybook/usage#partial-responses) |
 | `timeout` | `number`  | Overrides `defaultTimeout` for this story, in milliseconds, see [Wait limit](https://mokapi.io/docs/integrations/storybook/failing-stories#wait-limit) |
 
@@ -162,6 +162,23 @@ the initial value with `defaultValidation`, with the URL parameter
 `globals=mokapiValidation:on`, or for component tests with
 `storybookTest({ initialGlobals: { mokapiValidation: 'on' } })`, see
 [Vitest](https://mokapi.io/docs/integrations/storybook/failing-stories#vitest).
+
+### Global `mokapiTest`
+
+| Value       | Description                                          |
+|-------------|------------------------------------------------------|
+| `'error'`   | A story with a failing result fails                  |
+| `'warning'` | A failing result shows as a warning, the story stays green |
+| `'off'`     | Judge nothing, the story stays green                 |
+
+The initial value is `defaultTest`. There is no toolbar control. A story uses
+`parameters.mokapi.test` first, then this global, then `defaultTest`. You can
+override the global with the URL parameter `globals=mokapiTest:warning`, which
+you can combine with the validation global (`globals=mokapiValidation:on;mokapiTest:off`),
+or for component tests with
+`storybookTest({ initialGlobals: { mokapiValidation: 'on', mokapiTest: 'warning' } })`,
+see [Vitest](https://mokapi.io/docs/integrations/storybook/failing-stories#vitest).
+Any other value falls back to `defaultTest` and the panel shows a notice.
 
 ## Documentation
 
