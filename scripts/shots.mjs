@@ -41,6 +41,13 @@ export const shots = [
   },
   {
     ...docs,
+    name: 'partial-invalid',
+    file: 'partial-invalid.png',
+    story: 'orders--partial-invalid',
+    expect: { badge: 'WARN', text: ENUM_ERROR },
+  },
+  {
+    ...docs,
     name: 'panel-entries',
     file: 'panel-entries.png',
     story: 'orders--order-page',

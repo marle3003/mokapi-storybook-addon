@@ -169,8 +169,8 @@ async function switchValidationAndWait(page, state) {
 }
 
 // Opens a story or docs page like a Storybook user and optionally switches validation on.
-async function openStory(page, storybookUrl, { id, docs = false, validation = false }) {
-  await page.goto(`${storybookUrl}/?path=/${docs ? 'docs' : 'story'}/${id}`);
+async function openStory(page, storybookUrl, { id, docs = false, validation = false, layout = '' }) {
+  await page.goto(`${storybookUrl}/?path=/${docs ? 'docs' : 'story'}/${id}${layout}`);
   // The toggle is shown in story view only.
   if (!docs) await toggleButton(page).waitFor();
   if (validation) {
@@ -842,8 +842,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     });
 
     // Opens the story in the Storybook that has validation on from the start and waits for the panel.
-    const openValidated = async (page, id, storybookUnderTest = validatingStorybook) => {
-      await openStory(page, storybookUnderTest.url, { id });
+    const openValidated = async (page, id, storybookUnderTest = validatingStorybook, layout = '') => {
+      await openStory(page, storybookUnderTest.url, { id, layout });
       await openMokapiPanel(page);
     };
 
@@ -927,6 +927,30 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await assertStoryStaysGreen(page);
       await assertSidebarStatus(page, 'profile--partial', 'Success');
     });
+
+    // Narrow window, sidebar hidden, panel on the right: the toolbar has to wrap. The icons stay in the first row with
+    // the badge, the partial line gets its own row below, whatever the state.
+    const NARROW_PANEL_ON_THE_RIGHT = '&nav=0&panel=right';
+    const NARROW_VIEWPORT = { width: 1024, height: 640 };
+    for (const [id, badge] of [['profile--partial-invalid', 'WARN'], ['profile--partial', 'PARTIAL']]) {
+      await scenario(`the toolbar of ${id} keeps the icons in the badge row and puts the partial line below`, async (page) => {
+        await openValidated(page, id, validatingStorybook, NARROW_PANEL_ON_THE_RIGHT);
+        await showsText(reportBadge(page), badge);
+        await showsText(partialText(page), PARTIAL_TEXT);
+        const badgeBox = await boxOf(reportBadge(page));
+        const rerunBox = await boxOf(rerunButton(page));
+        const rerunCenter = rerunBox.y + rerunBox.height / 2;
+        assert.ok(
+          rerunCenter >= badgeBox.y && rerunCenter <= badgeBox.y + badgeBox.height,
+          `the rerun button is in the row of the badge: its center is at y ${rerunCenter}px, the badge spans ${badgeBox.y}px to ${badgeBox.y + badgeBox.height}px`,
+        );
+        const partialBox = await boxOf(partialText(page));
+        assert.ok(
+          partialBox.y >= badgeBox.y + badgeBox.height,
+          `the partial line is below the badge row: its top is at y ${partialBox.y}px, the badge ends at ${badgeBox.y + badgeBox.height}px`,
+        );
+      }, { viewport: NARROW_VIEWPORT });
+    }
 
     await scenario('a story with partial false reports the missing required property as invalid', async (page) => {
       await openValidated(page, 'profile--partial-off');

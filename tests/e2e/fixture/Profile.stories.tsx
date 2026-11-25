@@ -91,6 +91,11 @@ export const PartialOff = {
   parameters: { mokapi: { partial: false }, msw: { handlers: [profileHandler(partialProfile)] } },
 };
 
+// Partial does not excuse a wrong value: `email` has the wrong type, so the response is invalid and the badge is WARN.
+export const PartialInvalid = {
+  parameters: { mokapi: { partial: true }, msw: { handlers: [profileHandler({ name: 'Rex', email: 42 })] } },
+};
+
 export const InvalidPartialParameter = {
   parameters: { mokapi: { partial: 'yes' }, msw: { handlers: [profileHandler(jane)] } },
 };

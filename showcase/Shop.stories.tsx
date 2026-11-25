@@ -57,6 +57,15 @@ export const Partial: Story = {
   },
 };
 
+// Partial like `Partial`, but the status is not in the contract's enum, so the response is still invalid.
+export const PartialInvalid: Story = {
+  render: () => <OrderDetail path="/orders/1" />,
+  parameters: {
+    mokapi: { partial: true },
+    msw: { handlers: [orderHandler({ id: 1, status: 'shipped' })] },
+  },
+};
+
 // Three requests: a valid order, an order with an unknown status and a path of an older API version.
 export const OrderPage: Story = {
   render: () => <OrderOverview />,

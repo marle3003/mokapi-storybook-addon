@@ -284,9 +284,10 @@ const ToolbarRow = styled.div(({ theme }) => ({
   background: theme.background.app,
 }));
 // Takes the free space, so a long headline wraps next to the actions instead of pushing them to a new row. The 12em
-// basis keeps it readable: a long text after it (the partial line) moves to the next row instead of squeezing it.
+// basis keeps it readable. The partial line follows the actions and always starts its own row (see PartialLine).
 const Headline = styled.span({ fontWeight: 'bold', flex: '1 1 12em', minWidth: 0 });
 const ToolbarText = styled.span(({ theme }) => ({ color: theme.textMutedColor }));
+const PartialLine = styled(ToolbarText)({ flexBasis: '100%' });
 const ToolbarActions = styled.div({ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' });
 const NoticeRow = styled.div<{ kind: Notice['kind'] }>(({ theme, kind }) => ({
   padding: '8px 15px',
@@ -477,12 +478,12 @@ function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: st
       {badge && testMode && <ReportStatusBadge badge={badge} testMode={testMode} />}
       {headline && <Headline data-testid="mokapi-report-headline">{headline}</Headline>}
       {testMode === 'off' && <ToolbarText data-testid="mokapi-test-mode">{testModeText(testMode)}</ToolbarText>}
-      {partial && <ToolbarText data-testid="mokapi-partial">{PARTIAL_TEXT}</ToolbarText>}
       <ToolbarActions>
         <RerunButton />
         <HelpIconButton />
         {dashboardUrl && <DashboardIconButton dashboardUrl={dashboardUrl} />}
       </ToolbarActions>
+      {partial && <PartialLine data-testid="mokapi-partial">{PARTIAL_TEXT}</PartialLine>}
     </ToolbarRow>
   );
 }
