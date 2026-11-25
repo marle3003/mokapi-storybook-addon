@@ -50,13 +50,14 @@ export interface Report {
 }
 
 // renderId is unique per mount of a story (a re-render keeps it), so late answers of an earlier mount can be recognized.
-// The report names its story, because the sidebar status is set for it and stories on a Docs page count their renderIds each.
+// Every action names its story: stories on a Docs page run in their own iframe and count their renderIds each, so the
+// manager keeps the state per story.
 // testMode is set while the render is validated, partial when it validates with partial responses. unjudged marks a
 // mount of a disabled story or of a story in test mode 'off': the manager forgets the earlier Mokapi result of the story.
 export type PanelAction =
   | { type: 'render-started'; storyId: string; renderId: number; testMode?: TestMode; partial?: true; unjudged?: true }
-  | { type: 'result'; renderId: number; entry: Entry }
-  | { type: 'notice'; renderId: number; notice: Notice }
+  | { type: 'result'; storyId: string; renderId: number; entry: Entry }
+  | { type: 'notice'; storyId: string; renderId: number; notice: Notice }
   | ({ type: 'report'; renderId: number; storyId: string } & Report);
 
 export interface PanelState {
@@ -84,6 +85,19 @@ export function reducePanel(state: PanelState, action: PanelAction): PanelState 
   }
   const known = state.notices.some(({ kind, message }) => kind === action.notice.kind && message === action.notice.message);
   return known ? state : { ...state, notices: [...state.notices, action.notice] };
+}
+
+/** The panel state of each story that has started a render. */
+export type PanelStates = Readonly<Record<string, PanelState>>;
+
+export const panelOfStory = (states: PanelStates, storyId: string): PanelState =>
+  Object.hasOwn(states, storyId) ? states[storyId] : initialPanelState;
+
+/** Reduces the action into the state of its story, so another story with the same renderId is left alone. */
+export function reduceStoryPanels(states: PanelStates, action: PanelAction): PanelStates {
+  const state = panelOfStory(states, action.storyId);
+  const next = reducePanel(state, action);
+  return next === state ? states : { ...states, [action.storyId]: next };
 }
 
 export const resultsOfStory = (state: PanelState, storyId: string): PanelState =>

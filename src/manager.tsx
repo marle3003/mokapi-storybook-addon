@@ -42,9 +42,9 @@ import {
 import {
   PANEL_EVENT,
   forgetResults,
-  initialPanelState,
   invalidCount,
-  reducePanel,
+  panelOfStory,
+  reduceStoryPanels,
   rememberResult,
   uiResultOf,
   type Entry,
@@ -52,6 +52,7 @@ import {
   type MessageDetails,
   type Notice,
   type PanelAction,
+  type PanelStates,
   type PanelState,
   type Report,
 } from './results.js';
@@ -76,7 +77,7 @@ const TEST_RUN_CHANNEL = 'storybook/test/channel';
 
 // The panel is only mounted while its tab is open, but the badge must count while it is closed.
 // So the results live here and both the tab title and the panel subscribe to them.
-let panelState: PanelState = initialPanelState;
+let panelStates: PanelStates = {};
 // What the last test run found out per story. The panel shows it until the UI reports a newer result.
 let testRuns: StoryRuns = {};
 // The last UI result of each story that checked a response. A mount that checks nothing leaves it as it is.
@@ -90,12 +91,12 @@ const subscribers = new Set<() => void>();
 const notifySubscribers = (): void => subscribers.forEach((notify) => notify());
 
 function receive(action: PanelAction): void {
-  panelState = reducePanel(panelState, action);
+  panelStates = reduceStoryPanels(panelStates, action);
   notifySubscribers();
 }
 
-function rememberPanelResult(): void {
-  lastResults = rememberResult(lastResults, panelState);
+function rememberPanelResult(storyId: string): void {
+  lastResults = rememberResult(lastResults, panelOfStory(panelStates, storyId));
   notifySubscribers();
 }
 
@@ -140,11 +141,11 @@ function subscribe(notify: () => void): () => void {
 }
 
 function useResultsOfSelectedStory(): StoryPanel {
-  const state = useSyncExternalStore(subscribe, () => panelState);
+  const states = useSyncExternalStore(subscribe, () => panelStates);
   const runs = useSyncExternalStore(subscribe, () => testRuns);
   const last = useSyncExternalStore(subscribe, () => lastResults);
   const { storyId } = useStorybookState();
-  return panelOf(uiResultOf(state, last, storyId), runs, storyId);
+  return panelOf(uiResultOf(panelOfStory(states, storyId), last, storyId), runs, storyId);
 }
 
 const PanelRoot = styled.div(({ theme }) => ({
@@ -569,7 +570,7 @@ addons.register('mokapi', (api) => {
     // A report older than a test run, or a mount that checked nothing, is no newer result: the last one stays.
     if (settled.overtaken || isSkippedReport(action)) return;
     forgetTestRun(action.storyId);
-    rememberPanelResult();
+    rememberPanelResult(action.storyId);
     updateStatuses([[action.storyId, action]]);
   });
   api.on(TEST_RUN_CHANNEL, (event: unknown) => {

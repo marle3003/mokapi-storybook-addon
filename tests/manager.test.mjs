@@ -126,6 +126,15 @@ test('a first mount without a validated response sets no status', async () => {
   assert.equal(manager.sidebarStatus(STORY), undefined);
 });
 
+// The manager was reloaded while the preview kept running: the report comes without the render-started of its mount.
+test('a report without a render-started of its story still sets the sidebar status', async () => {
+  const manager = await loadManager();
+
+  manager.emitPanel({ type: 'report', renderId: 1, storyId: STORY, status: 'warning', headline: '1 response does not match the contract.', invalid: 1, valid: 0 });
+
+  assert.equal(manager.sidebarStatus(STORY), 'status-value:warning');
+});
+
 // Switches validation on while `a--one` is selected and lets its re-render finish after `afterSwitch` ran.
 async function switchValidationOn(afterSwitch) {
   const manager = await loadManager();

@@ -75,6 +75,7 @@ interface InFlight {
 // The state of one mount of a story: its panel list, test mode and requests in flight. Re-renders share it.
 interface Render {
   renderId: number;
+  storyId: string;
   api?: string;
   /** Mokapi validates the responses of this render with partial responses (only while validating). */
   partial: boolean;
@@ -94,7 +95,7 @@ interface Render {
 
 // The listener lives as long as the worker, the story changes with every render: each hook run
 // replaces this slot and the listener reads it.
-let current: Render = newRender(0, { partial: false, validating: false, sending: false, mode: 'off', timeout: DEFAULT_TIMEOUT_MS });
+let current: Render = newRender(0, '', { partial: false, validating: false, sending: false, mode: 'off', timeout: DEFAULT_TIMEOUT_MS });
 // A component may fetch again after a render, so the response can arrive when the next render has
 // already started. The request belongs to the render that was current when it started.
 const startedIn = new Map<string, Render>();
@@ -110,8 +111,8 @@ let renderCount = 0;
 let capturedCount = 0;
 const observedWorkers = new WeakSet<object>();
 
-function newRender(renderId: number, { api, partial, validating, sending, mode, timeout }: Pick<Render, 'api' | 'partial' | 'validating' | 'sending' | 'mode' | 'timeout'>): Render {
-  return { renderId, api, partial, validating, sending, mode, timeout, state: initialPanelState, inFlight: new Map(), requestStartListeners: new Set() };
+function newRender(renderId: number, storyId: string, { api, partial, validating, sending, mode, timeout }: Pick<Render, 'api' | 'partial' | 'validating' | 'sending' | 'mode' | 'timeout'>): Render {
+  return { renderId, storyId, api, partial, validating, sending, mode, timeout, state: initialPanelState, inFlight: new Map(), requestStartListeners: new Set() };
 }
 
 const isWorker = (msw: unknown): msw is MswWorker =>
@@ -166,19 +167,20 @@ function onUnhandledException(started: StartedRequest): void {
 // partial option: the entry is shown as Mokapi returned it.
 function toPanelActions(
   outcome: ValidationOutcome,
-  renderId: number,
+  render: Pick<Render, 'storyId' | 'renderId'>,
   request: Omit<Entry, 'status' | 'errors'>,
   dashboardUrl: string,
 ): PanelAction[] {
-  const noticeOf = (kind: Notice['kind'], message: string): PanelAction => ({ type: 'notice', renderId, notice: { kind, message } });
+  const { storyId, renderId } = render;
+  const noticeOf = (kind: Notice['kind'], message: string): PanelAction => ({ type: 'notice', storyId, renderId, notice: { kind, message } });
   if ('message' in outcome) {
     if (outcome.status !== 'unreachable') return [noticeOf(outcome.status, outcome.message)];
     const entry: Entry = { ...request, status: 'unreachable', errors: [], message: outcome.message };
-    return [{ type: 'result', renderId, entry }, noticeOf('unreachable', outcome.message)];
+    return [{ type: 'result', storyId, renderId, entry }, noticeOf('unreachable', outcome.message)];
   }
   const operation = 'operation' in outcome ? outcome.operation : undefined;
   const matched = operation && { operation, operationUrl: operationUrl(dashboardUrl, operation) };
-  const result: PanelAction = { type: 'result', renderId, entry: { ...request, status: outcome.status, errors: outcome.errors, ...matched } };
+  const result: PanelAction = { type: 'result', storyId, renderId, entry: { ...request, status: outcome.status, errors: outcome.errors, ...matched } };
   return outcome.partialUnsupportedMessage === undefined ? [result] : [result, noticeOf('partial-unsupported', outcome.partialUnsupportedMessage)];
 }
 
@@ -203,7 +205,7 @@ function validate(mocked: MockedResponse, { emit, dashboardUrl }: HookOptions): 
     const payload = await serializePair(request.clone(), response.clone(), render.api, render.partial);
     const settle = (answer: unknown) => classify(dashboardUrl, answer, render.partial);
     const outcome = await sendValidation(dashboardUrl, payload).then(settle, settle);
-    toPanelActions(outcome, render.renderId, {
+    toPanelActions(outcome, render, {
       sequence,
       time,
       method: payload.request.method,
@@ -213,7 +215,7 @@ function validate(mocked: MockedResponse, { emit, dashboardUrl }: HookOptions): 
       response: detailsOf(payload.response),
     }, dashboardUrl).forEach((action) => announce(render, emit, action));
   })()
-    .catch((error: unknown) => announce(render, emit, { type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: unreadableMessage(error) } }))
+    .catch((error: unknown) => announce(render, emit, { type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: unreadableMessage(error) } }))
     // Nothing may leave the listener, not even a failing emit of the notice.
     .catch(() => {})
     .finally(() => inFlight?.finish());
@@ -248,20 +250,20 @@ export function validationHook(context: HookContext, options: HookOptions): void
   const partial = validating && resolvedPartial.partial;
   const resolvedTimeout = resolveTimeout(timeoutParameter, options.defaultTimeout);
   const worker = isWorker(context.msw) ? context.msw : undefined;
-  const render = newRender(++renderCount, { api, partial, validating, sending: validating && worker !== undefined, mode, timeout: resolvedTimeout.timeout });
+  const render = newRender(++renderCount, context.id, { api, partial, validating, sending: validating && worker !== undefined, mode, timeout: resolvedTimeout.timeout });
   current = render;
   rendersOfContext.set(context, render);
   if (context.abortSignal) rendersOfMount.set(context.abortSignal, render);
   const emit = (action: PanelAction) => announce(render, options.emit, action);
 
   if (validating || worker !== undefined || unjudged) {
-    emit({ type: 'render-started', storyId: context.id, renderId: render.renderId, ...(validating && { testMode: mode }), ...(partial && { partial }), ...(unjudged && { unjudged }) });
+    emit({ type: 'render-started', storyId: render.storyId, renderId: render.renderId, ...(validating && { testMode: mode }), ...(partial && { partial }), ...(unjudged && { unjudged }) });
   }
-  if (validating && invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TEST_PARAMETER_MESSAGE } });
-  if (validating && resolvedPartial.invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_PARTIAL_PARAMETER_MESSAGE } });
-  if (validating && resolvedTimeout.invalid) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TIMEOUT_PARAMETER_MESSAGE } });
+  if (validating && invalid) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TEST_PARAMETER_MESSAGE } });
+  if (validating && resolvedPartial.invalid) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_PARTIAL_PARAMETER_MESSAGE } });
+  if (validating && resolvedTimeout.invalid) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'config-error', message: INVALID_TIMEOUT_PARAMETER_MESSAGE } });
   if (worker !== undefined) return observe(worker, options);
-  if (validating) emit({ type: 'notice', renderId: render.renderId, notice: { kind: 'worker-missing', message: WORKER_MISSING } });
+  if (validating) emit({ type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: { kind: 'worker-missing', message: WORKER_MISSING } });
 }
 
 type Outcome = 'finished' | 'timeout' | 'aborted';
@@ -330,7 +332,7 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
     if (outcome === 'aborted') return;
     if (outcome === 'timeout') {
       waiting.filter(({ finished }) => !finished)
-        .forEach((request) => announce(render, options.emit, { type: 'notice', renderId: render.renderId, notice: timeoutNotice(request, render.timeout) }));
+        .forEach((request) => announce(render, options.emit, { type: 'notice', storyId: render.storyId, renderId: render.renderId, notice: timeoutNotice(request, render.timeout) }));
     }
   } finally {
     clearTimeout(timer);
@@ -339,6 +341,6 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
   const status = reportStatus(render.state, render.mode);
   const { entries, notices } = render.state;
   context.reporting.addReport({ type: 'mokapi', version: 1, status, result: { entries, notices, testMode: render.mode, ...(render.partial && { partial: true }) } });
-  announce(render, options.emit, { type: 'report', renderId: render.renderId, storyId: context.id, status, headline: headline(render.state), invalid: invalidCount(render.state), valid: validCount(render.state) });
+  announce(render, options.emit, { type: 'report', storyId: render.storyId, renderId: render.renderId, status, headline: headline(render.state), invalid: invalidCount(render.state), valid: validCount(render.state) });
   if (status === 'failed' && isVitestBrowserRun()) throw new MokapiContractError(errorMessage(render.state));
 }

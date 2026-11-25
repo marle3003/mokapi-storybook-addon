@@ -824,6 +824,20 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await toggleButton(page).count(), 0);
     });
 
+    await scenario('a story without a request does not show the invalid response of another story of the Docs page', async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'docs-remembered--docs', docs: true });
+      // The slow story reports last: both iframes have started and NoRequest has reported by then.
+      const invalid = await previewFrame(page).locator('#iframe--docs-remembered--invalid').first().elementHandle();
+      await (await invalid.contentFrame()).waitForFunction(() => window.__storyFinished?.length > 0, null, { timeout: 20000 });
+
+      await page.locator('[id="docs-remembered--no-request"]').click();
+      await previewFrame(page).getByTestId('profile').getByText('No request').waitFor();
+      await waitForFinishedRender(page);
+      await openMokapiPanel(page);
+      await page.getByText(EMPTY_LIST_TEXT).waitFor();
+      assert.equal(await entries(page).count(), 0);
+    });
+
     // Opens the story in the Storybook that has validation on from the start and waits for the panel.
     const openValidated = async (page, id, storybookUnderTest = validatingStorybook) => {
       await openStory(page, storybookUnderTest.url, { id });

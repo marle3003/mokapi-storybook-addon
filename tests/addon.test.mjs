@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { resolveOptions } from '../dist/index.js';
 import { isDisabled } from '../dist/options.js';
-import { forgetResults, initialPanelState, invalidCount, reducePanel, rememberResult, resultsOfStory, uiResultOf, validCount } from '../dist/results.js';
+import { forgetResults, initialPanelState, invalidCount, panelOfStory, reducePanel, reduceStoryPanels, rememberResult, resultsOfStory, uiResultOf, validCount } from '../dist/results.js';
 import { previewAnnotations, managerEntries, managerHead, viteFinal } from '../dist/preset.js';
 import { initialRemountState, nextRemount, remountIfSelected } from '../dist/remount.js';
 import { initialRendering, isRendering, nextRendering } from '../dist/rendering.js';
@@ -2235,8 +2235,8 @@ const entry = (sequence, status = 'valid') => ({
   sequence, time: 1000 + sequence, method: 'GET', url: '/api/profile', statusCode: 200, status, errors: [],
 });
 const renderStarted = (renderId, storyId = 'a--one') => ({ type: 'render-started', storyId, renderId });
-const resultOf = (renderId, sequence, status) => ({ type: 'result', renderId, entry: entry(sequence, status) });
-const noticeOf = (renderId, kind, message = kind) => ({ type: 'notice', renderId, notice: { kind, message } });
+const resultOf = (renderId, sequence, status, storyId = 'a--one') => ({ type: 'result', storyId, renderId, entry: entry(sequence, status) });
+const noticeOf = (renderId, kind, message = kind, storyId = 'a--one') => ({ type: 'notice', storyId, renderId, notice: { kind, message } });
 const reduceAll = (...actions) => actions.reduce(reducePanel, initialPanelState);
 
 test('panel starts empty and a render of a story clears its entries and notices', () => {
@@ -2270,7 +2270,7 @@ test('panel keeps the request and response details of an entry', () => {
   const request = { headers: { accept: '*/*' }, body: '', truncated: false };
   const response = { headers: { 'content-type': 'application/json' }, body: '{"name":"Jane"}', truncated: false };
   const detailed = { ...entry(1), request, response };
-  const state = reduceAll(renderStarted(1), { type: 'result', renderId: 1, entry: detailed });
+  const state = reduceAll(renderStarted(1), { type: 'result', storyId: 'a--one', renderId: 1, entry: detailed });
   assert.deepEqual(state.entries[0].request, request);
   assert.deepEqual(state.entries[0].response, response);
 });
@@ -3024,6 +3024,56 @@ test('rememberResult keeps the state of a story with a verdict and ignores state
   assert.equal(rememberResult(remembered, initialPanelState), remembered);
   const passed = judgedPanel('a--one', { status: 'passed', headline: '', invalid: 0, valid: 1 });
   assert.deepEqual(rememberResult(remembered, passed), { 'a--one': passed });
+});
+
+// Stories on a Docs page (docs.story.inline false) run in their own iframe, and each iframe counts its renderIds from 1.
+// The manager gets their actions in one stream, in the order the manager's PANEL_EVENT handler receives them.
+test('the results of a story on a Docs page are remembered for that story and not for another story with the same renderId', () => {
+  const reportOf = (storyId, report) => ({ type: 'report', renderId: 1, storyId, ...report });
+  const stream = [
+    renderStarted(1, 'docs--invalid'),
+    renderStarted(1, 'docs--no-request'),
+    reportOf('docs--no-request', skippedReport),
+    resultOf(1, 1, 'invalid', 'docs--invalid'),
+    reportOf('docs--invalid', warningReport),
+  ];
+  // Like the manager: every action reaches the panel states, a report with a verdict is remembered.
+  let panels = {};
+  let remembered = {};
+  for (const action of stream) {
+    panels = reduceStoryPanels(panels, action);
+    if (action.type === 'report' && !isSkippedReport(action)) remembered = rememberResult(remembered, panelOfStory(panels, action.storyId));
+  }
+  assert.deepEqual(Object.keys(remembered), ['docs--invalid']);
+  assert.deepEqual(remembered['docs--invalid'].entries.map(({ status }) => status), ['invalid']);
+  assert.deepEqual(panelOfStory(panels, 'docs--no-request').entries, []);
+});
+
+test('a render-started of one story leaves the state of another story', () => {
+  const first = reduceStoryPanels({}, renderStarted(1, 'a--one'));
+  const withResult = reduceStoryPanels(first, resultOf(1, 1, 'invalid', 'a--one'));
+  const both = reduceStoryPanels(withResult, renderStarted(1, 'a--two'));
+  assert.equal(both['a--one'], withResult['a--one']);
+  assert.deepEqual(panelOfStory(both, 'a--two').entries, []);
+});
+
+test('a late result, notice or report of another story with the same renderId does not touch the state of a story', () => {
+  const states = reduceStoryPanels(reduceStoryPanels({}, renderStarted(1, 'a--one')), renderStarted(1, 'a--two'));
+  const afterOne = ['result', 'notice', 'report'].map((type) => reduceStoryPanels(states, {
+    result: resultOf(1, 1, 'invalid', 'a--one'),
+    notice: noticeOf(1, 'timeout', 'late', 'a--one'),
+    report: { type: 'report', renderId: 1, storyId: 'a--one', ...warningReport },
+  }[type]));
+  for (const next of afterOne) assert.equal(next['a--two'], states['a--two']);
+  assert.notEqual(afterOne[0]['a--one'], states['a--one']);
+});
+
+test('an action of a story that has not started is ignored, and a new mount of a story discards the results of its earlier renderId', () => {
+  const empty = {};
+  assert.equal(reduceStoryPanels(empty, resultOf(1, 1, 'invalid', 'a--one')), empty);
+  const remounted = reduceStoryPanels(reduceStoryPanels(reduceStoryPanels({}, renderStarted(1, 'a--one')), renderStarted(2, 'a--one')), resultOf(1, 1, 'invalid', 'a--one'));
+  assert.deepEqual(panelOfStory(remounted, 'a--one').entries, []);
+  assert.equal(panelOfStory(remounted, 'a--one').renderId, 2);
 });
 
 test('forgetResults drops the given stories and returns the same object when none is known', () => {
