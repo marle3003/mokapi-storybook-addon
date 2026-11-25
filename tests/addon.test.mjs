@@ -12,9 +12,9 @@ import { toggleState } from '../dist/toggle.js';
 import { MokapiContractError, testHook, validationHook } from '../dist/listener.js';
 import {
   BODY_LIMIT,
+  CONTRACT_ERROR_PREFIX,
   contextMenuRow,
   contractCheckboxTooltip,
-  countLine,
   DISABLED_HINT,
   DOCS_URL,
   errorMessage,
@@ -22,6 +22,7 @@ import {
   formatTime,
   handlerTimeoutMessage,
   headline,
+  DASHBOARD_LINK_LABEL,
   HELP_ICON_LABEL,
   HELP_LINK_TEXT,
   hintOf,
@@ -846,24 +847,6 @@ test('requests are attributed to the story that rendered last', async (t) => {
   assert.equal((await result).renderId, secondRender);
 });
 
-const unreachableEntry = () => ({ ...validEntry(), status: 'unreachable' });
-
-test('count line names the validated responses and the kinds that occur', () => {
-  assert.equal(
-    countLine([validEntry(), invalidEntry(), invalidEntry(), notInContractEntry(), unreachableEntry()]),
-    '5 responses validated, 1 valid, 2 invalid, 1 not in contract, 1 Mokapi not reachable',
-  );
-});
-
-test('count line leaves out kinds without entries and uses the singular for one response', () => {
-  assert.equal(countLine([invalidEntry()]), '1 response validated, 1 invalid');
-  assert.equal(countLine([validEntry(), validEntry()]), '2 responses validated, 2 valid');
-});
-
-test('count line is undefined without entries', () => {
-  assert.equal(countLine([]), undefined);
-});
-
 test('the partial parameter overrides defaultPartial', () => {
   for (const defaultPartial of [true, false]) {
     assert.deepEqual(resolvePartial(undefined, defaultPartial), { partial: defaultPartial, invalid: false });
@@ -1054,28 +1037,67 @@ test('report headline is the headline of the report for a warning and a failed r
   assert.equal(reportHeadline(undefined, stateOf([])), undefined);
 });
 
+test('report headline is the short headline of the notice kind that the report headline names', () => {
+  const cases = [
+    ['unreachable', 'Mokapi is not reachable.'],
+    ['endpoint-missing', 'Mokapi needs an update.'],
+    ['partial-unsupported', 'Mokapi needs an update.'],
+    ['config-error', 'Invalid Mokapi configuration.'],
+    ['timeout', 'Mokapi validation timed out.'],
+  ];
+  for (const [kind, short] of cases) {
+    const message = `full ${kind} message with its hint`;
+    const state = stateOf([], [panelNotice(kind, message)]);
+    assert.equal(reportHeadline({ status: 'warning', headline: message, invalid: 0, valid: 0 }, state), short, kind);
+    assert.equal(reportHeadline({ status: 'failed', headline: message, invalid: 0, valid: 0 }, state), short, kind);
+  }
+});
+
+test('report headline is the short headline of the first failing notice when several fail', () => {
+  const notices = [panelNotice('worker-missing', 'no worker'), panelNotice('unreachable', 'not reachable'), panelNotice('timeout', 'timeout (GET /a).')];
+  assert.equal(reportHeadline({ status: 'failed', headline: 'not reachable', invalid: 0, valid: 0 }, stateOf([], notices)), 'Mokapi is not reachable.');
+  const reversed = [notices[2], notices[1]];
+  assert.equal(reportHeadline({ status: 'failed', headline: 'timeout (GET /a).', invalid: 0, valid: 0 }, stateOf([], reversed)), 'Mokapi validation timed out.');
+});
+
+test('report headline keeps the count headline of invalid responses next to a failing notice', () => {
+  const invalidHeadline = '1 response does not match the contract.';
+  const state = stateOf([invalidEntry()], [panelNotice('unreachable', 'not reachable')]);
+  assert.equal(reportHeadline({ status: 'failed', headline: invalidHeadline, invalid: 1, valid: 0 }, state), invalidHeadline);
+});
+
+test('report headline keeps the full text of a test run result without notices', () => {
+  const description = `${CONTRACT_ERROR_PREFIX}Mokapi is not reachable at http://localhost:8080. Check the dashboardUrl option.`;
+  const run = testRunOf([componentTest('a--one', 'status-value:error', description)]);
+  const panel = panelOf(initialPanelState, testRunResults(run), 'a--one');
+  assert.deepEqual(panel.notices, []);
+  assert.equal(reportHeadline(panel.report, panel), 'Mokapi is not reachable at http://localhost:8080. Check the dashboardUrl option.');
+});
+
 test('report headline says that no response was checked for a passed report without a valid response', () => {
   assert.equal(SKIP_HEADLINE, 'No response was checked against the contract.');
   assert.equal(reportHeadline(passedReport(0), stateOf([])), SKIP_HEADLINE);
   assert.equal(reportHeadline(passedReport(0), stateOf([notInContractEntry()])), SKIP_HEADLINE);
 });
 
-test('report headline names the missing MSW worker for a skipped report', () => {
+test('report headline is the short headline of the missing MSW worker for a skipped report', () => {
+  const short = 'MSW worker not found.';
   const message = 'MSW worker not found: `context.msw` is missing. Use `mswLoader` or set `context.msw` in your loader.';
   const skipped = passedReport(0);
-  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('worker-missing', message)])), message);
-  assert.equal(reportHeadline(skipped, stateOf([notInContractEntry()], [panelNotice('worker-missing', message)])), message);
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('worker-missing', message)])), short);
+  assert.equal(reportHeadline(skipped, stateOf([notInContractEntry()], [panelNotice('worker-missing', message)])), short);
   // A response that came after the report doesn't change the headline.
-  assert.equal(reportHeadline(skipped, stateOf([validEntry()], [panelNotice('worker-missing', message)])), message);
+  assert.equal(reportHeadline(skipped, stateOf([validEntry()], [panelNotice('worker-missing', message)])), short);
   assert.equal(reportHeadline(passedReport(1), stateOf([validEntry()], [panelNotice('worker-missing', message)])), undefined);
 });
 
-test('report headline names the handler that did not answer for a skipped report, the first matching notice wins', () => {
+test('report headline is the short headline of the handler that did not answer for a skipped report, the first matching notice wins', () => {
+  const short = 'No response from the MSW handler.';
   const noAnswer = handlerTimeoutMessage('GET /api/profile', 4000);
   const skipped = passedReport(0);
-  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('handler-timeout', noAnswer)])), noAnswer);
-  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('worker-missing', 'no worker'), panelNotice('handler-timeout', noAnswer)])), 'no worker');
-  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('handler-timeout', noAnswer), panelNotice('worker-missing', 'no worker')])), noAnswer);
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('handler-timeout', noAnswer)])), short);
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('worker-missing', 'no worker'), panelNotice('handler-timeout', noAnswer)])), 'MSW worker not found.');
+  assert.equal(reportHeadline(skipped, stateOf([], [panelNotice('handler-timeout', noAnswer), panelNotice('worker-missing', 'no worker')])), short);
   assert.equal(reportHeadline(passedReport(1), stateOf([validEntry()], [panelNotice('handler-timeout', noAnswer)])), undefined);
 });
 
@@ -3143,5 +3165,6 @@ test('the help texts and the docs URL are the documented ones', () => {
   assert.equal(DOCS_URL, 'https://mokapi.io/docs/integrations/storybook');
   assert.equal(HELP_LINK_TEXT, 'Learn more about the Mokapi addon');
   assert.equal(HELP_ICON_LABEL, 'Mokapi addon documentation');
+  assert.equal(DASHBOARD_LINK_LABEL, 'Open Mokapi dashboard');
   assert.deepEqual(DISABLED_HINT, { before: 'Validation is disabled for this story with ', code: 'parameters.mokapi.disable', after: '.' });
 });

@@ -4,7 +4,7 @@ import React, { useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { addons, experimental_getStatusStore, experimental_useStatusStore, types, useGlobals, useStorybookApi, useStorybookState } from 'storybook/manager-api';
 import { FORCE_REMOUNT, GLOBALS_UPDATED, SET_GLOBALS, STORY_CHANGED, STORY_RENDER_PHASE_CHANGED } from 'storybook/internal/core-events';
 import { ActionList, Badge, Form, IconButton, Link, ScrollArea, ToggleButton, TooltipNote, WithTooltip } from 'storybook/internal/components';
-import { CheckIcon, CircleHollowIcon, QuestionIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
+import { CheckIcon, CircleHollowIcon, QuestionIcon, ShareAltIcon, StopAltIcon, SyncIcon, VerifiedIcon } from '@storybook/icons';
 import { Global, styled, useTheme } from 'storybook/theming';
 import { initialRemountState, nextRemount, remountIfSelected, type RemountEvent } from './remount.js';
 import { initialRendering, isRendering, nextRendering, type Rendering, type RenderingEvent } from './rendering.js';
@@ -13,11 +13,11 @@ import {
   contextMenuRow,
   type ContextMenuRow,
   contractCheckboxTooltip,
-  countLine,
   DISABLED_HINT,
   DOCS_URL,
   formatBody,
   formatTime,
+  DASHBOARD_LINK_LABEL,
   HELP_ICON_LABEL,
   HELP_LINK_TEXT,
   hintOf,
@@ -283,9 +283,11 @@ const ToolbarRow = styled.div(({ theme }) => ({
   borderBottom: `1px solid ${theme.appBorderColor}`,
   background: theme.background.app,
 }));
-const Headline = styled.span({ fontWeight: 'bold' });
+// Takes the free space, so a long headline wraps next to the actions instead of pushing them to a new row. The 12em
+// basis keeps it readable: a long text after it (the partial line) moves to the next row instead of squeezing it.
+const Headline = styled.span({ fontWeight: 'bold', flex: '1 1 12em', minWidth: 0 });
 const ToolbarText = styled.span(({ theme }) => ({ color: theme.textMutedColor }));
-const ToolbarActions = styled.div({ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' });
+const ToolbarActions = styled.div({ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' });
 const NoticeRow = styled.div<{ kind: Notice['kind'] }>(({ theme, kind }) => ({
   padding: '8px 15px',
   borderBottom: `1px solid ${theme.appBorderColor}`,
@@ -458,22 +460,28 @@ function HelpIconButton() {
   );
 }
 
+function DashboardIconButton({ dashboardUrl }: { dashboardUrl: string }) {
+  return (
+    <IconButton asChild padding="small" variant="ghost" ariaLabel={DASHBOARD_LINK_LABEL} data-testid="mokapi-dashboard-link">
+      <a href={dashboardUrl} target="_blank" rel="noreferrer"><ShareAltIcon /></a>
+    </IconButton>
+  );
+}
+
 function Toolbar({ state, dashboardUrl }: { state: PanelState; dashboardUrl?: string }) {
-  const { entries, testMode, report, partial } = state;
+  const { testMode, report, partial } = state;
   const badge = reportBadge(testMode, report, partial);
   const headline = reportHeadline(report, state);
-  const counts = countLine(entries);
   return (
     <ToolbarRow>
       {badge && testMode && <ReportStatusBadge badge={badge} testMode={testMode} />}
       {headline && <Headline data-testid="mokapi-report-headline">{headline}</Headline>}
-      {counts && <ToolbarText data-testid="mokapi-report-counts">{counts}</ToolbarText>}
       {testMode === 'off' && <ToolbarText data-testid="mokapi-test-mode">{testModeText(testMode)}</ToolbarText>}
       {partial && <ToolbarText data-testid="mokapi-partial">{PARTIAL_TEXT}</ToolbarText>}
       <ToolbarActions>
         <RerunButton />
         <HelpIconButton />
-        {dashboardUrl && <Link href={dashboardUrl} target="_blank" rel="noreferrer">Open Mokapi dashboard</Link>}
+        {dashboardUrl && <DashboardIconButton dashboardUrl={dashboardUrl} />}
       </ToolbarActions>
     </ToolbarRow>
   );

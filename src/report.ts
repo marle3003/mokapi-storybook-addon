@@ -77,6 +77,7 @@ export const DISABLED_HINT = { before: 'Validation is disabled for this story wi
 export const DOCS_URL = 'https://mokapi.io/docs/integrations/storybook';
 export const HELP_LINK_TEXT = 'Learn more about the Mokapi addon';
 export const HELP_ICON_LABEL = 'Mokapi addon documentation';
+export const DASHBOARD_LINK_LABEL = 'Open Mokapi dashboard';
 
 // A PASS of a partial story doesn't mean the mock is complete, so the panel says so.
 export const PARTIAL_TEXT = 'Partial responses: missing properties are not checked.';
@@ -122,23 +123,13 @@ export function errorMessage(state: Results): string {
   return [`${CONTRACT_ERROR_PREFIX}${headline(state)}`, ...(details.length === 0 ? [] : ['', ...details])].join('\n');
 }
 
-// The labels of the entry kinds, in the order the panel counts them.
+// The labels of the entry kinds in the panel rows.
 export const KIND_LABELS: Record<Entry['status'], string> = {
   valid: 'valid',
   invalid: 'invalid',
   'not-in-contract': 'not in contract',
   unreachable: 'Mokapi not reachable',
 };
-
-export function countLine(entries: Entry[]): string | undefined {
-  if (entries.length === 0) return undefined;
-  const validated = `${entries.length} ${entries.length === 1 ? 'response' : 'responses'} validated`;
-  const kinds = (Object.keys(KIND_LABELS) as Entry['status'][])
-    .map((kind) => ({ kind, count: entries.filter(({ status }) => status === kind).length }))
-    .filter(({ count }) => count > 0)
-    .map(({ kind, count }) => `${count} ${KIND_LABELS[kind]}`);
-  return [validated, ...kinds].join(', ');
-}
 
 // The report and the status store are untyped at runtime, so only a positive integer counts as a count.
 const isPositiveCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) > 0;
@@ -152,10 +143,29 @@ export const isSkippedReport = (report: Report): boolean => report.status === 'p
 
 export const SKIP_HEADLINE = 'No response was checked against the contract.';
 
+// The toolbar shows these when the notice row below it carries the full message with its hint.
+const NOTICE_HEADLINES: Record<Notice['kind'], string> = {
+  unreachable: 'Mokapi is not reachable.',
+  'endpoint-missing': 'Mokapi needs an update.',
+  'partial-unsupported': 'Mokapi needs an update.',
+  'config-error': 'Invalid Mokapi configuration.',
+  timeout: 'Mokapi validation timed out.',
+  'handler-timeout': 'No response from the MSW handler.',
+  'worker-missing': 'MSW worker not found.',
+};
+
 // A report that passed with a valid response has nothing to say beyond its badge. A skip names a missing worker or a
-// handler that did not answer, which are no failures, so the generic text would hide the cause.
+// handler that did not answer, which are no failures, so the generic text would hide the cause. A headline that is
+// the message of a notice is short, because the notice row shows the message; without such a notice (a result taken
+// from a test run's error message) the full text stays.
 export function reportHeadline(report: Report | undefined, { notices }: Pick<PanelState, 'notices'>): string | undefined {
   if (report === undefined) return undefined;
+  const text = fullHeadline(report, notices);
+  const shown = notices.find(({ message }) => message === text);
+  return shown ? NOTICE_HEADLINES[shown.kind] : text;
+}
+
+function fullHeadline(report: Report, notices: Notice[]): string | undefined {
   if (isSkippedReport(report)) return notices.find(({ kind }) => kind === 'worker-missing' || kind === 'handler-timeout')?.message ?? SKIP_HEADLINE;
   return report.status === 'passed' ? undefined : report.headline;
 }
