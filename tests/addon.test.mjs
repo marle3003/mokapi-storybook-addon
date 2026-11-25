@@ -2435,10 +2435,12 @@ test('panel shows the results of the selected story only', () => {
 });
 
 test('preview starts with the values of defaultValidation and defaultTest and renders no Storybook dropdown', async () => {
-  // Vite defines this constant at build time; defaultValidation true shows that it is read.
+  // Vite defines this constant at build time; values other than the defaults show that it is read.
+  // The query gives this test its own module instance, the later preview tests rely on defaultTest 'warning'.
+  globalThis.__MOKAPI_STORYBOOK_OPTIONS__ = { dashboardUrl: 'http://localhost:9090', defaultValidation: true, defaultTest: 'error' };
+  const { globalTypes, initialGlobals } = await import('../dist/preview.js?default-test-error');
   globalThis.__MOKAPI_STORYBOOK_OPTIONS__ = { dashboardUrl: 'http://localhost:9090', defaultValidation: true };
-  const { globalTypes, initialGlobals } = await import('../dist/preview.js');
-  assert.deepEqual(initialGlobals, { mokapiValidation: 'on', mokapiTest: 'warning' });
+  assert.deepEqual(initialGlobals, { mokapiValidation: 'on', mokapiTest: 'error' });
   // A globalType with `toolbar` would make Storybook render its own dropdown next to the manager's toggle.
   assert.equal(globalTypes, undefined);
 });
