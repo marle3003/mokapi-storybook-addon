@@ -523,10 +523,47 @@ async function assertCountStays(locator, count) {
   assert.equal(await locator.count(), count);
 }
 
+// Records the phases of the story's render and every `globalsUpdated` in the preview frame as
+// `window.__events` and returns the frame. Local channel listeners run synchronously in emission order.
+// Storybook emits `globalsUpdated` right before it calls `rerender()`, so the entry after
+// 'globalsUpdated' is the re-render's first phase.
+async function recordPhases(page) {
+  const preview = page.frame({ name: 'storybook-preview-iframe' });
+  await preview.waitForFunction(() => window.__STORYBOOK_PREVIEW__?.currentRender);
+  await preview.evaluate(() => {
+    // Starts with the current phase, because the render may already be in `completing`.
+    window.__events = [window.__STORYBOOK_PREVIEW__.currentRender.phase];
+    const channel = window.__STORYBOOK_ADDONS_CHANNEL__;
+    channel.on('storyRenderPhaseChanged', ({ newPhase }) => window.__events.push(newPhase));
+    channel.on('globalsUpdated', () => window.__events.push('globalsUpdated'));
+  });
+  return preview;
+}
+
+// The phases around every switch: `[phase before, 'globalsUpdated', phase after]` for each
+// `globalsUpdated` from index `from` on. Storybook emits its own `globalsUpdated` while the story starts,
+// so `from` is taken after the first phase of interest.
+function switchContexts(events, from) {
+  return events.flatMap((event, index) =>
+    index >= from && event === 'globalsUpdated' ? [events.slice(index - 1, index + 2)] : []);
+}
+
+// The events from the first `globalsUpdated` at or after index `from` on, i.e. from the first switch on.
+const eventsFromSwitch = (events, from) => events.slice(events.indexOf('globalsUpdated', from));
+
+// The phases that tell the order of switches, re-renders and the remount.
+const SWITCH_ORDER_EVENTS = ['globalsUpdated', 'loading', 'finished', 'aborted'];
+
 // The animation of the `Animated` story runs 8 s, but waitForAnimations gives up after 5 s, so the old
 // render leaves `completing` 5 s after it started. Switch late enough that the re-render finishes
 // clearly after it, but before the old render leaves `completing`.
 const SWITCH_INTO_COMPLETING_MS = 1500;
+
+// A first switch before the old render has finished and a second one after it. The first re-render ends
+// about 5 s after it entered `completing`, but not later than 8 s after the old render did (the animation
+// restarts only with a remount). Not above 2500 ms: from there re-render 1 and 2 both end at that limit,
+// and the order of their `finished` events depends on timers.
+const SWITCH_BEFORE_OLD_FINISHED_MS = 2000;
 
 test('Storybook user validates the MSW responses of a story against the OpenAPI contract', { timeout: 600000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'mokapi-storybook-e2e-'));
@@ -722,18 +759,8 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
 
     await scenario('switching validation on while the story finishes its render validates once without reloading the preview', async (page) => {
       await open(page, { id: 'profile--animated' });
-      const preview = page.frame({ name: 'storybook-preview-iframe' });
-      await preview.evaluate(() => { window.__marker = 'same document'; });
-      // Local channel listeners run synchronously in emission order. Storybook emits `globalsUpdated`
-      // right before it calls `rerender()`, so the entry after 'globalsUpdated' is the re-render's first phase.
-      await preview.waitForFunction(() => window.__STORYBOOK_PREVIEW__?.currentRender);
-      await preview.evaluate(() => {
-        // Starts with the current phase, because the render may already be in `completing`.
-        window.__events = [window.__STORYBOOK_PREVIEW__.currentRender.phase];
-        const channel = window.__STORYBOOK_ADDONS_CHANNEL__;
-        channel.on('storyRenderPhaseChanged', ({ newPhase }) => window.__events.push(newPhase));
-        channel.on('globalsUpdated', () => window.__events.push('globalsUpdated'));
-      });
+      await page.frame({ name: 'storybook-preview-iframe' }).evaluate(() => { window.__marker = 'same document'; });
+      const preview = await recordPhases(page);
       // The animation keeps the render in `completing`: not pending, so Storybook re-renders at once.
       await preview.waitForFunction(() => window.__events.at(-1) === 'completing');
       // Storybook emits its own `globalsUpdated` while the story starts, so look only after this point.
@@ -751,12 +778,11 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await preview.evaluate(() => window.__marker), 'same document');
       // Without this check the switch may land in `afterEach` or `finished` and exercise another path.
       const events = await preview.evaluate(() => window.__events);
-      const switched = events.indexOf('globalsUpdated', beforeSwitch);
-      assert.deepEqual(events.slice(switched - 1, switched + 2), ['completing', 'globalsUpdated', 'loading'],
+      assert.deepEqual(switchContexts(events, beforeSwitch)[0], ['completing', 'globalsUpdated', 'loading'],
         `the switch must land in the running render's 'completing' phase and start the re-render at once, got: ${events.join(', ')}`);
       // A remount before the re-render has finished cancels it: the re-render then reports `aborted`
       // and still emits its `finished`, so only the missing `aborted` shows that the remount waited.
-      const afterSwitch = events.slice(switched);
+      const afterSwitch = eventsFromSwitch(events, beforeSwitch);
       const remount = afterSwitch.indexOf('loading', afterSwitch.indexOf('loading') + 1);
       assert.ok(!afterSwitch.slice(0, remount).includes('aborted'),
         `the remount must not cancel the re-render, got: ${events.join(', ')}`);
@@ -1076,6 +1102,62 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await eventually(async () => assert.equal(await rerunButton(page).isDisabled({ timeout: 1000 }), true));
       await waitForFinishedRender(page);
       await eventually(async () => assert.equal(await rerunButton(page).isDisabled({ timeout: 1000 }), false));
+    });
+
+    // Two switches off and on while the `Animated` story renders, so the remount validates. The second
+    // switch waits for `secondSwitchAfter`, a phase of the first re-render.
+    const twoSwitchesScenario = (name, { firstSwitchDelayMs, secondSwitchAfter, landings, order }) => scenario(name, async (page) => {
+      await openStory(page, validatingStorybook.url, { id: 'profile--animated' });
+      await page.frame({ name: 'storybook-preview-iframe' }).evaluate(() => { window.__marker = 'same document'; });
+      const preview = await recordPhases(page);
+      await preview.waitForFunction(() => window.__events.at(-1) === 'completing');
+      const beforeSwitch = await preview.evaluate(() => window.__events.length);
+      await setTimeout(firstSwitchDelayMs);
+      await switchValidation(page, 'off');
+      // `switchValidation` doesn't wait for the preview, so the first `globalsUpdated` may still be missing.
+      await preview.waitForFunction(({ from, phase }) => {
+        const switched = window.__events.indexOf('globalsUpdated', from);
+        return switched >= 0 && window.__events.slice(switched).includes(phase);
+      }, { from: beforeSwitch, phase: secondSwitchAfter });
+      await switchValidation(page, 'on');
+      // The remount is the third `loading` after the first switch (re-render 1, re-render 2, remount).
+      await preview.waitForFunction((from) => {
+        const rest = window.__events.slice(window.__events.indexOf('globalsUpdated', from));
+        return rest.filter((event) => event === 'loading').length >= 3;
+      }, beforeSwitch);
+      const atRemount = await preview.evaluate(() => window.__events);
+
+      assert.deepEqual(switchContexts(atRemount, beforeSwitch), landings,
+        `each switch must land in the intended phase and start its re-render at once, got: ${atRemount.join(', ')}`);
+      const afterFirstSwitch = eventsFromSwitch(atRemount, beforeSwitch);
+      const remountAt = afterFirstSwitch.flatMap((event, index) => event === 'loading' ? [index] : [])[2];
+      assert.deepEqual(
+        afterFirstSwitch.slice(0, remountAt + 1).filter((event) => SWITCH_ORDER_EVENTS.includes(event)),
+        order,
+        `the phases after the first switch, got: ${atRemount.join(', ')}`);
+
+      await openMokapiPanel(page);
+      await entries(page, 'valid').first().waitFor();
+      await assertCountStays(entries(page), 1);
+      // The window is over only now, so an `aborted` of re-render 2 shows up as well.
+      const events = await preview.evaluate(() => window.__events);
+      assert.ok(!eventsFromSwitch(events, beforeSwitch).includes('aborted'),
+        `no render may be cancelled after the first switch, got: ${events.join(', ')}`);
+      assert.equal(await preview.evaluate(() => window.__marker), 'same document');
+    });
+
+    await twoSwitchesScenario('switching validation twice, the second time after the old render has finished, remounts once after the latest re-render', {
+      firstSwitchDelayMs: SWITCH_BEFORE_OLD_FINISHED_MS,
+      secondSwitchAfter: 'finished',
+      landings: [['completing', 'globalsUpdated', 'loading'], ['finished', 'globalsUpdated', 'loading']],
+      order: ['globalsUpdated', 'loading', 'finished', 'globalsUpdated', 'loading', 'finished', 'finished', 'loading'],
+    });
+
+    await twoSwitchesScenario('switching validation twice while the old render is still finishing remounts once after the latest re-render', {
+      firstSwitchDelayMs: SWITCH_INTO_COMPLETING_MS,
+      secondSwitchAfter: 'completing',
+      landings: [['completing', 'globalsUpdated', 'loading'], ['completing', 'globalsUpdated', 'loading']],
+      order: ['globalsUpdated', 'loading', 'globalsUpdated', 'loading', 'finished', 'finished', 'finished', 'loading'],
     });
 
     await scenario('an entry row shows kind, method badge, URL, status badge and time, and the errors without expanding', async (page) => {

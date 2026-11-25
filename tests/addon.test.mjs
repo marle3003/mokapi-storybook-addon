@@ -2429,19 +2429,36 @@ test('a switch while the story is pending remounts after the enqueued re-render 
 });
 
 // Enqueued: switched(on), started(new), switched(off), finished(new), started(new), finished.
-// Immediate: switched(on), started(new), switched(off), started(new), finished(old), finished(new).
-test('a second switch while the re-render runs remounts once after the latest re-render has finished', () => {
+test('a second switch that is enqueued while the re-render runs remounts once after the latest re-render has finished', () => {
   const enqueued = [initialValidation('off'), started(), switched('on'), finished(), started(), switched('off')];
   assert.deepEqual(remountSteps(...enqueued, finished()), []);
   assert.deepEqual(remountSteps(...enqueued, finished(), started(), finished()), ['a--one']);
-  const immediate = [initialValidation('off'), started(), switched('on'), started(), switched('off'), started()];
-  assert.deepEqual(remountSteps(...immediate, finished()), []);
-  assert.deepEqual(remountSteps(...immediate, finished(), finished()), ['a--one']);
 });
 
-// The first re-render is immediate over a running render: started(old), switched(on), started(re-render 1),
+// Immediate, observed on Storybook 10.6.7 in the e2e scenario "switching validation twice while the old render is
+// still finishing remounts once after the latest re-render": started(old), switched(on), started(re-render 1),
+// switched(off), started(re-render 2), finished(old), finished(re-render 1), finished(re-render 2).
+// Three renders are open, so the remount waits for the third finished (it used to fire at the second).
+test('a second switch while the old render is still finishing remounts after the latest re-render has finished', () => {
+  const immediate = [initialValidation('off'), started(), switched('on'), started(), switched('off'), started()];
+  assert.deepEqual(remountSteps(...immediate, finished()), []);
+  assert.deepEqual(remountSteps(...immediate, finished(), finished()), []);
+  assert.deepEqual(remountSteps(...immediate, finished(), finished(), finished()), ['a--one']);
+  assert.deepEqual(remountSteps(...immediate, finished(), finished(), finished(), finished()), ['a--one']);
+});
+
+test('three switches within one render remount once after the latest re-render has finished', () => {
+  const threeSwitches = [
+    initialValidation('off'), started(), switched('on'), started(), switched('off'), started(), switched('on'), started(),
+  ];
+  assert.deepEqual(remountSteps(...threeSwitches, finished(), finished(), finished()), []);
+  assert.deepEqual(remountSteps(...threeSwitches, finished(), finished(), finished(), finished()), ['a--one']);
+});
+
+// Observed on Storybook 10.6.7 in the e2e scenario "switching validation twice, the second time after the old render
+// has finished, remounts once after the latest re-render": started(old), switched(on), started(re-render 1),
 // finished(old), switched(off), started(re-render 2), finished(re-render 1), finished(re-render 2).
-// The finished of the old render has cleared `running`, but re-render 1 still runs at the second switch.
+// The old render has finished at the second switch, but re-render 1 still runs.
 test('a second switch while the first re-render of a running render completes remounts after the latest re-render has finished', () => {
   const beforeFirstReRenderFinished = [
     initialValidation('off'), started(), switched('on'), started(), finished(), switched('off'), started(),

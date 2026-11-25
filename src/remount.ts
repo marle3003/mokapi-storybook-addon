@@ -2,27 +2,29 @@
 // would not request anything. After a switch of `mokapiValidation` the story is remounted, but only
 // once the re-render that the switch caused has finished: remounting a story that is still rendering
 // makes Storybook reload the preview. Phase events of the same story carry the same `renderId` for the
-// old render and the re-render, so the order of the events is what tells them apart. Three orders occur:
+// old render and the re-render, so the order of the events is what tells them apart. Every render ends
+// with one `finished`, so `open` counts the `started` without their `finished` per story and the remount
+// waits until the last of them has finished. These orders occur:
 //   enqueued:                  switched, finished(old), started, finished(new)
 //   immediate, running render: switched, started, finished(old), finished(new)
 //   immediate, settled render: switched, started, finished
-// Storybook enqueues the re-render while the story is pending and starts it at once otherwise, so
-// `running` (a `started` without its `finished`) tells at the switch whether one `finished` of the old
-// render is still to come. A second switch while the re-render of the pending story still runs skips
-// that re-render's `finished` the same way, although `running` may already be cleared by the `finished`
-// of the old render. Remaining edge cases: three or more switches within one render are not counted
-// (only one `finished` is skipped), and `aborted` is not tracked, so a render that ended only
-// by `aborted` leaves `running` set until the next phase event, and a switch that reaches the manager
-// before the phase events it follows can miss one remount.
+//   second switch, immediate:  switched, started(1), switched, started(2), finished(old), finished(1), finished(2)
+//                              (observed on Storybook 10.6.7, e2e "switching validation twice while the old
+//                              render is still finishing ...")
+//   second switch, enqueued:   switched, started(1), switched, finished(1), started(2), finished(2)
+//   second switch after the old render finished, observed on Storybook 10.6.7:
+//                              switched, started(1), finished(old), switched, started(2), finished(1), finished(2)
+// A switch resets `rendering`, so a `finished` that comes before the start of the latest re-render never
+// remounts. Remaining edge cases: `aborted` is not tracked (a render that ended only by `aborted` still
+// emits `finished`), and a switch that reaches the manager before the phase events it follows can miss
+// one remount.
 export interface RemountState {
   validation?: unknown;
-  /** The story that is running a render (`started` without `finished`). */
-  running?: string;
+  /** Renders per story that have started and not finished yet. */
+  open: Record<string, number>;
   /** The story to remount when the re-render after a switch has finished. */
   pending?: string;
-  /** A render that was running at the switch has not finished yet; its `finished` is not the re-render's. */
-  oldRenderRunning?: boolean;
-  /** The re-render has started. */
+  /** The latest re-render has started. */
   rendering?: boolean;
 }
 
@@ -33,37 +35,44 @@ export type RemountEvent =
   | { type: 'finished'; storyId: string }
   | { type: 'story-changed' };
 
-export const initialRemountState: RemountState = {};
+export const initialRemountState: RemountState = { open: {} };
 
-// A `finished` of this story is still to come: a render is running, or the re-render of an earlier switch is.
-function isRenderOpen(state: RemountState, storyId: string | undefined): boolean {
-  return state.running === storyId || (state.pending === storyId && state.rendering === true);
+function openRenders(state: RemountState, storyId: string): number {
+  return state.open[storyId] ?? 0;
+}
+
+function withOpenRenders(state: RemountState, storyId: string, count: number): RemountState {
+  return { ...state, open: { ...state.open, [storyId]: Math.max(0, count) } };
 }
 
 export function nextRemount(state: RemountState, event: RemountEvent): { state: RemountState; remount?: string } {
   switch (event.type) {
     case 'initial':
-      return { state: { validation: event.validation } };
+      return { state: { validation: event.validation, open: {} } };
     case 'switched': {
       const changed = state.validation !== undefined && state.validation !== event.validation;
       return {
         state: changed
-          ? { validation: event.validation, running: state.running, pending: event.storyId, oldRenderRunning: isRenderOpen(state, event.storyId) }
+          ? { validation: event.validation, open: state.open, pending: event.storyId }
           : { ...state, validation: event.validation },
       };
     }
     case 'started':
-      return { state: { ...state, running: event.storyId, rendering: state.rendering || event.storyId === state.pending } };
+      return {
+        state: {
+          ...withOpenRenders(state, event.storyId, openRenders(state, event.storyId) + 1),
+          rendering: state.rendering || event.storyId === state.pending,
+        },
+      };
     case 'finished': {
-      const idle = { ...state, running: state.running === event.storyId ? undefined : state.running };
-      if (event.storyId !== state.pending) return { state: idle };
-      if (state.oldRenderRunning) return { state: { ...idle, oldRenderRunning: false } };
-      return state.rendering
-        ? { state: { validation: state.validation }, remount: event.storyId }
-        : { state: idle };
+      const next = withOpenRenders(state, event.storyId, openRenders(state, event.storyId) - 1);
+      const lastRenderFinished = event.storyId === state.pending && state.rendering && openRenders(next, event.storyId) === 0;
+      return lastRenderFinished
+        ? { state: { validation: state.validation, open: next.open }, remount: event.storyId }
+        : { state: next };
     }
     case 'story-changed':
-      return { state: { validation: state.validation } };
+      return { state: { validation: state.validation, open: {} } };
   }
 }
 
