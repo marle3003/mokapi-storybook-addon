@@ -1832,6 +1832,103 @@ test('afterEach returns without a report when the story is torn down during the 
   assert.deepEqual(context.reports, []);
 });
 
+// Timers that were created and neither fired (the tests tick less than the shortest one) nor cleared.
+function trackPendingTimers(t) {
+  const pending = new Set();
+  const set = globalThis.setTimeout;
+  const clear = globalThis.clearTimeout;
+  t.mock.method(globalThis, 'setTimeout', (...args) => { const timer = set(...args); pending.add(timer); return timer; });
+  t.mock.method(globalThis, 'clearTimeout', (timer) => { pending.delete(timer); clear(timer); });
+  return pending;
+}
+
+test('a story torn down during the quiet window leaves no timer running', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = trackPendingTimers(t);
+  const context = testContext(fakeWorker(), failingMode);
+  validationHook(context, hookOptions(recorder()));
+  const finished = testHook(context, hookOptions(recorder()));
+  await tick(t, 50);
+  context.abort();
+  await finished;
+  assert.equal(pending.size, 0, 'the quiet window and its 1 s limit are cleared');
+});
+
+test('a request that starts after the story was torn down does not start a timer', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  const finished = testHook(context, hookOptions(recorder()));
+  await tick(t, 50);
+  context.abort();
+  await finished;
+  const pending = trackPendingTimers(t);
+  worker.started(getProfile(), 'after-teardown');
+  assert.equal(pending.size, 0);
+});
+
+test('afterEach of a story that is already torn down starts no timer and reports nothing', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const worker = fakeWorker();
+  const context = testContext(worker, failingMode);
+  validationHook(context, hookOptions(recorder()));
+  context.abort();
+  const pending = trackPendingTimers(t);
+  assert.equal(await testHook(context, hookOptions(recorder())), undefined);
+  worker.started(getProfile(), 'after-teardown');
+  assert.equal(pending.size, 0);
+  assert.deepEqual(context.reports, []);
+});
+
+// A re-render (globals or args changed) runs the hooks again with a new context but the same abortSignal.
+const reRender = (context) => ({ ...testContext(context.msw), abortSignal: context.abortSignal });
+
+test('a request that starts while two re-renders wait extends the quiet window of both', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const worker = fakeWorker();
+  const first = testContext(worker);
+  const second = reRender(first);
+  validationHook(first, hookOptions(recorder()));
+  const firstFinished = testHook(first, hookOptions(recorder()));
+  await tick(t, 50);
+  validationHook(second, hookOptions(recorder()));
+  const secondFinished = testHook(second, hookOptions(recorder()));
+  await tick(t, 40);
+  worker.started(getProfile(), 'during-window');
+  worker.mocked(getProfile(), jsonResponse(), 'during-window');
+  await tick(t, 50);
+  assert.equal(first.reports.length, 0, 'the first run waits until 100 ms after the request that started at 90 ms');
+  await tick(t, 50);
+  await Promise.all([firstFinished, secondFinished]);
+  assert.equal(first.reports.length, 1);
+  assert.equal(second.reports.length, 1);
+});
+
+test('a re-render that finished does not take the request:start of the one still waiting', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(answers.valid));
+  const worker = fakeWorker();
+  const first = testContext(worker);
+  const second = reRender(first);
+  validationHook(first, hookOptions(recorder()));
+  const firstFinished = testHook(first, hookOptions(recorder()));
+  await tick(t, 50);
+  validationHook(second, hookOptions(recorder()));
+  const secondFinished = testHook(second, hookOptions(recorder()));
+  await tick(t, 50);
+  await firstFinished;
+  await tick(t, 20);
+  worker.started(getProfile(), 'after-first');
+  worker.mocked(getProfile(), jsonResponse(), 'after-first');
+  await tick(t, 99);
+  assert.equal(second.reports.length, 0, 'the second run waits until 100 ms after the request that started at 120 ms');
+  await tick(t, 1);
+  await secondFinished;
+  assert.equal(second.reports.length, 1);
+});
+
 test('a timeout does not stop a story in warning mode', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   holdMokapi(t);

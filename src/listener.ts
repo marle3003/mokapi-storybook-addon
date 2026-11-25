@@ -88,8 +88,8 @@ interface Render {
   /** What the panel shows for this render, so the report holds exactly that. */
   state: PanelState;
   inFlight: Map<string, InFlight>;
-  /** Set while afterEach waits for the quiet window. */
-  onRequestStart?: () => void;
+  /** One entry per afterEach that waits for the quiet window (re-renders of a mount can wait at the same time). */
+  requestStartListeners: Set<() => void>;
 }
 
 // The listener lives as long as the worker, the story changes with every render: each hook run
@@ -111,7 +111,7 @@ let capturedCount = 0;
 const observedWorkers = new WeakSet<object>();
 
 function newRender(renderId: number, { api, partial, validating, sending, mode, timeout }: Pick<Render, 'api' | 'partial' | 'validating' | 'sending' | 'mode' | 'timeout'>): Render {
-  return { renderId, api, partial, validating, sending, mode, timeout, state: initialPanelState, inFlight: new Map() };
+  return { renderId, api, partial, validating, sending, mode, timeout, state: initialPanelState, inFlight: new Map(), requestStartListeners: new Set() };
 }
 
 const isWorker = (msw: unknown): msw is MswWorker =>
@@ -148,7 +148,7 @@ function trackInFlight(render: Render, { request, requestId }: StartedRequest): 
 function onRequestStart(started: StartedRequest): void {
   startedIn.set(started.requestId, current);
   if (current.sending) trackInFlight(current, started);
-  current.onRequestStart?.();
+  current.requestStartListeners.forEach((listener) => listener());
 }
 
 // MSW passes the request on or its handler threw: no response will be validated.
@@ -266,23 +266,28 @@ export function validationHook(context: HookContext, options: HookOptions): void
 
 type Outcome = 'finished' | 'timeout' | 'aborted';
 
-// Resolves when no request has started for QUIET_WINDOW_MS, at the latest after QUIET_WINDOW_MAX_MS.
-function untilQuiet(render: Render): Promise<void> {
+// Resolves 'finished' when no request has started for QUIET_WINDOW_MS, at the latest after QUIET_WINDOW_MAX_MS, and
+// 'aborted' when the story is torn down first. Either way its timers and its request:start listener are gone.
+function untilQuiet(render: Render, abortSignal: AbortSignal): Promise<Outcome> {
   return new Promise((resolve) => {
     let quiet: ReturnType<typeof setTimeout>;
-    const cap = setTimeout(done, QUIET_WINDOW_MAX_MS);
-    function done(): void {
-      clearTimeout(quiet);
-      clearTimeout(cap);
-      render.onRequestStart = undefined;
-      resolve();
-    }
     const restart = () => {
       clearTimeout(quiet);
-      quiet = setTimeout(done, QUIET_WINDOW_MS);
+      quiet = setTimeout(() => end('finished'), QUIET_WINDOW_MS);
     };
-    render.onRequestStart = restart;
-    restart();
+    const cap = setTimeout(() => end('finished'), QUIET_WINDOW_MAX_MS);
+    const abort = () => end('aborted');
+    function end(outcome: Outcome): void {
+      clearTimeout(quiet);
+      clearTimeout(cap);
+      render.requestStartListeners.delete(restart);
+      abortSignal.removeEventListener('abort', abort);
+      resolve(outcome);
+    }
+    render.requestStartListeners.add(restart);
+    abortSignal.addEventListener('abort', abort);
+    if (abortSignal.aborted) abort();
+    else restart();
   });
 }
 
@@ -317,9 +322,8 @@ export async function testHook(context: TestContext, options: HookOptions): Prom
   const timeout = new Promise<Outcome>((resolve) => { timer = setTimeout(() => resolve('timeout'), render.timeout); });
   const aborted = untilAborted(context.abortSignal);
   try {
-    const quiet = await Promise.race([untilQuiet(render).then((): Outcome => 'finished'), aborted]);
     // Storybook reloads the preview when a render that is torn down is still pending.
-    if (quiet === 'aborted') return;
+    if (await untilQuiet(render, context.abortSignal) === 'aborted') return;
     const waiting = [...render.inFlight.values()];
     const validated = Promise.all(waiting.map(({ done }) => done)).then((): Outcome => 'finished');
     const outcome = await Promise.race([validated, timeout, aborted]);
