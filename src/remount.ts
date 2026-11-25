@@ -8,7 +8,10 @@
 //   immediate, settled render: switched, started, finished
 // Storybook enqueues the re-render while the story is pending and starts it at once otherwise, so
 // `running` (a `started` without its `finished`) tells at the switch whether one `finished` of the old
-// render is still to come. Remaining edge cases: `aborted` is not tracked, so a render that ended only
+// render is still to come. A second switch while the re-render of the pending story still runs skips
+// that re-render's `finished` the same way, although `running` may already be cleared by the `finished`
+// of the old render. Remaining edge cases: three or more switches within one render are not counted
+// (only one `finished` is skipped), and `aborted` is not tracked, so a render that ended only
 // by `aborted` leaves `running` set until the next phase event, and a switch that reaches the manager
 // before the phase events it follows can miss one remount.
 export interface RemountState {
@@ -32,6 +35,11 @@ export type RemountEvent =
 
 export const initialRemountState: RemountState = {};
 
+// A `finished` of this story is still to come: a render is running, or the re-render of an earlier switch is.
+function isRenderOpen(state: RemountState, storyId: string | undefined): boolean {
+  return state.running === storyId || (state.pending === storyId && state.rendering === true);
+}
+
 export function nextRemount(state: RemountState, event: RemountEvent): { state: RemountState; remount?: string } {
   switch (event.type) {
     case 'initial':
@@ -40,7 +48,7 @@ export function nextRemount(state: RemountState, event: RemountEvent): { state: 
       const changed = state.validation !== undefined && state.validation !== event.validation;
       return {
         state: changed
-          ? { validation: event.validation, running: state.running, pending: event.storyId, oldRenderRunning: state.running === event.storyId }
+          ? { validation: event.validation, running: state.running, pending: event.storyId, oldRenderRunning: isRenderOpen(state, event.storyId) }
           : { ...state, validation: event.validation },
       };
     }

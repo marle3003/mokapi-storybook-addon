@@ -2439,6 +2439,37 @@ test('a second switch while the re-render runs remounts once after the latest re
   assert.deepEqual(remountSteps(...immediate, finished(), finished()), ['a--one']);
 });
 
+// The first re-render is immediate over a running render: started(old), switched(on), started(re-render 1),
+// finished(old), switched(off), started(re-render 2), finished(re-render 1), finished(re-render 2).
+// The finished of the old render has cleared `running`, but re-render 1 still runs at the second switch.
+test('a second switch while the first re-render of a running render completes remounts after the latest re-render has finished', () => {
+  const beforeFirstReRenderFinished = [
+    initialValidation('off'), started(), switched('on'), started(), finished(), switched('off'), started(),
+  ];
+  assert.deepEqual(remountSteps(...beforeFirstReRenderFinished, finished()), []);
+  assert.deepEqual(remountSteps(...beforeFirstReRenderFinished, finished(), finished()), ['a--one']);
+});
+
+// Guard: the second switch is enqueued, because re-render 1 still runs: started(old), switched(on),
+// started(re-render 1), finished(old), switched(off), finished(re-render 1), started(re-render 2), finished.
+test('a second switch that is enqueued behind the first re-render remounts after the latest re-render has finished', () => {
+  const enqueued = [initialValidation('off'), started(), switched('on'), started(), finished(), switched('off'), finished()];
+  assert.deepEqual(remountSteps(...enqueued), []);
+  assert.deepEqual(remountSteps(...enqueued, started()), []);
+  assert.deepEqual(remountSteps(...enqueued, started(), finished()), ['a--one']);
+});
+
+test('a switch after the previous re-render has remounted does not skip a finished', () => {
+  const afterRemount = [initialValidation('off'), started(), switched('on'), started(), finished(), finished(), switched('off'), started()];
+  assert.deepEqual(remountSteps(...afterRemount), ['a--one']);
+  assert.deepEqual(remountSteps(...afterRemount, finished()), ['a--one', 'a--one']);
+});
+
+test('a re-render of another story that is running does not make the switch skip a finished', () => {
+  const beforeFinished = [initialValidation('off'), switched('on', 'a--two'), started('a--two'), switched('off', 'a--one'), started()];
+  assert.deepEqual(remountSteps(...beforeFinished, finished()), ['a--one']);
+});
+
 // The click on another story changes the manager's selection before its STORY_CHANGED arrives, so the
 // remount of the old story is still pending then. Remounting it would render the old story next to the new one.
 test('a remount is dropped when its story is no longer the selected one', () => {
