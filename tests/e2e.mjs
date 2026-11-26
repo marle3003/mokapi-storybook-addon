@@ -334,11 +334,18 @@ async function assertHintCentered(page) {
   assert.deepEqual(await fontOf(hintText(page)), { fontWeight: '700', fontSize: '13px' });
 }
 
-// `exact`, because `OK` would also match "Mokapi".
-async function assertBadgeTooltip(trigger, text) {
+// Hovers trigger until the tooltip shows; tooltip is a locator or a text, matched `exact`, because `OK` would also
+// match "Mokapi". One hover is not enough: Storybook's react-aria tooltips open on `pointerenter` only when the last
+// interaction was a pointer one (a click without pointer or a focus resets it, the hover's own `pointermove` comes
+// too late), and the Run tests widget moves its buttons while it expands. So the mouse leaves and hovers again.
+async function assertTooltip(trigger, tooltip) {
   const page = trigger.page();
-  await trigger.hover();
-  await page.getByText(text, { exact: true }).waitFor();
+  const shown = typeof tooltip === 'string' ? page.getByText(tooltip, { exact: true }) : tooltip;
+  await eventually(async () => {
+    await page.mouse.move(0, 0);
+    await trigger.hover();
+    await shown.waitFor({ timeout: 1000 });
+  });
   await page.mouse.move(0, 0);
 }
 
@@ -631,13 +638,9 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const preview = page.frame({ name: 'storybook-preview-iframe' });
       await preview.evaluate(() => { window.__marker = 'same document'; });
       await openMokapiPanel(page);
-      await toggleButton(page, 'off').hover();
-      await page.getByRole('tooltip').getByText(TOGGLE_TOOLTIPS.off).waitFor();
+      await assertTooltip(toggleButton(page, 'off'), page.getByRole('tooltip').getByText(TOGGLE_TOOLTIPS.off));
       await switchValidation(page, 'on');
-      // The tooltip closes on press while the pointer stays on the button; leave it so hover() enters again.
-      await page.mouse.move(0, 0);
-      await toggleButton(page, 'on').hover();
-      await page.getByRole('tooltip').getByText(TOGGLE_TOOLTIPS.on).waitFor();
+      await assertTooltip(toggleButton(page, 'on'), page.getByRole('tooltip').getByText(TOGGLE_TOOLTIPS.on));
       // One plain switch, no dropdown: a leftover globalTypes toolbar would be a button with a popup.
       assert.equal(await toggleButton(page).getAttribute('aria-haspopup'), null);
       assert.equal(await page.getByRole('button', { name: TOGGLE_NAME }).count(), 0);
@@ -894,7 +897,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await scenario(`the badge tooltip shows the test mode ${mode} of the story`, async (page) => {
         await openValidated(page, id);
         await reportBadge(page).waitFor();
-        await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS[mode]);
+        await assertTooltip(reportBadge(page), TEST_MODE_TEXTS[mode]);
         assert.equal(await testModeOffText(page).count(), 0);
       });
     }
@@ -911,7 +914,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     await scenario('an invalid test parameter shows the default test mode and a configuration notice', async (page) => {
       await openValidated(page, 'profile--invalid-test-parameter');
       await reportBadge(page).waitFor();
-      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.warning);
+      await assertTooltip(reportBadge(page), TEST_MODE_TEXTS.warning);
       await notice(page, "Mokapi: parameters.mokapi.test must be 'error', 'warning' or 'off'.").waitFor();
       await assertStoryStaysGreen(page);
     });
@@ -1060,7 +1063,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
         await showsText(reportBadge(page), 'SKIP');
         await showsText(reportHeadline(page), headline);
         if (id === 'profile--error-no-worker') await notice(page, noWorkerNotice).waitFor();
-        await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS[mode]);
+        await assertTooltip(reportBadge(page), TEST_MODE_TEXTS[mode]);
         await assertStoryStaysGreen(page);
         await assertNoSidebarStatus(page, id);
       }
@@ -1100,10 +1103,13 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     });
 
     await scenario('Rerun is disabled while the story renders and enabled after the render has finished', async (page) => {
-      // afterEach holds the render for seconds.
-      await openStory(page, validatingStorybook.url, { id: 'profile--slow-after-each' });
+      // afterEach holds the render until the test releases it.
+      await openStory(page, validatingStorybook.url, { id: 'profile--held-after-each' });
       await openMokapiPanel(page);
+      const preview = page.frame({ name: 'storybook-preview-iframe' });
+      await preview.waitForFunction(() => window.__releaseAfterEach);
       await eventually(async () => assert.equal(await rerunButton(page).isDisabled({ timeout: 1000 }), true));
+      await preview.evaluate(() => window.__releaseAfterEach());
       await waitForFinishedRender(page);
       await eventually(async () => assert.equal(await rerunButton(page).isDisabled({ timeout: 1000 }), false));
     });
@@ -1180,7 +1186,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       assert.equal(await badge.textContent(), '200');
       assert.equal(await badge.getAttribute('aria-label'), '200 OK');
       assert.equal(await backgroundColorOf(badge), 'rgb(102, 191, 60)');
-      await assertBadgeTooltip(badge, 'OK');
+      await assertTooltip(badge, 'OK');
       // The badges set their own font, they don't inherit the mono font of the URL.
       assert.match(await fontFamilyOf(methodBadge), /^"?Nunito Sans/);
       assert.match(await fontFamilyOf(badge), /^"?Nunito Sans/);
@@ -1222,7 +1228,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await entryDetails(valid).locator('strong', { hasText: /^Response$/ }).waitFor();
       assert.equal(await heading.textContent(), '200');
       assert.equal(await heading.getAttribute('aria-label'), '200 OK');
-      await assertBadgeTooltip(heading, 'OK');
+      await assertTooltip(heading, 'OK');
       assert.match(await fontFamilyOf(requestBadge(valid)), /^"?Nunito Sans/);
       assert.match(await fontFamilyOf(heading), /^"?Nunito Sans/);
 
@@ -1330,8 +1336,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const button = testProviderRegion.getByRole('button', { name: 'Mokapi: Error (1 invalid response)', exact: true });
       await button.waitFor({ timeout: 3000 });
       await showsText(button, '1');
-      await button.hover();
-      await page.getByText('1 response does not match the contract.', { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, '1 response does not match the contract.');
     });
 
     await scenario('the context menu row of a story shows the number of invalid responses after a browser reload', async (page) => {
@@ -1361,8 +1366,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await button.waitFor({ timeout: 3000 });
       assert.equal(await button.isDisabled(), false);
       await showsText(button, '');
-      await button.hover();
-      await page.getByText(PASSED_TOOLTIP, { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, PASSED_TOOLTIP);
       await button.click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
     });
@@ -1375,8 +1379,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await button.waitFor({ timeout: 3000 });
       assert.equal(await button.isDisabled(), true);
       await showsText(button, '');
-      await button.hover();
-      await page.getByText(NO_RESULT_TOOLTIP, { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, NO_RESULT_TOOLTIP);
     });
 
     await scenario('a skipped story sets no status and shows the gray context menu row', async (page) => {
@@ -1427,8 +1430,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const button = await contractRowOf(page, 'profile', 'Mokapi: Error (2 invalid responses)');
       await button.waitFor({ timeout: 3000 });
       await showsText(button, '2');
-      await button.hover();
-      await page.getByText('Contract validation failed', { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, 'Contract validation failed');
       await button.click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
       await eventually(async () => assert.match(page.url(), /path=\/story\/profile--error-invalid/));
@@ -1442,8 +1444,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await openStory(page, validatingStorybook.url, { id: 'profile--off-invalid' });
       const button = await contractRowOf(page, 'docs', 'Mokapi: Passed');
       await button.waitFor({ timeout: 3000 });
-      await button.hover();
-      await page.getByText(PASSED_TOOLTIP, { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, PASSED_TOOLTIP);
       await button.click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
       await eventually(async () => assert.match(page.url(), /path=\/story\/docs--valid/));
@@ -1520,8 +1521,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const checkbox = mokapiModule(page).getByRole('checkbox', { name: 'Contract' });
       assert.equal(await checkbox.isDisabled(), true);
       assert.equal(await checkbox.isChecked(), checked);
-      await mokapiModule(page).getByText('Contract', { exact: true }).hover();
-      await page.getByText(tooltip, { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(mokapiModule(page).getByText('Contract', { exact: true }), tooltip);
     };
 
     await scenario('the Contract checkbox of the Run tests widget is disabled and empty without defaultValidation', async (page) => {
@@ -1561,8 +1561,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await button.waitFor({ timeout: 3000 });
       assert.equal(await button.isDisabled(), true);
       await showsText(button, '');
-      await button.hover();
-      await page.getByText(NO_RESULT_TOOLTIP, { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, NO_RESULT_TOOLTIP);
     });
 
     await scenario('the Contract row of the Run tests widget is green with passed stories only and opens the first passed story', async (page) => {
@@ -1579,8 +1578,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await button.waitFor({ timeout: 3000 });
       assert.equal(await button.isDisabled(), false);
       await showsText(button, '');
-      await button.hover();
-      await page.getByText(PASSED_TOOLTIP, { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, PASSED_TOOLTIP);
       await button.click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
       await eventually(async () => assert.match(page.url(), /path=\/story\/profile--valid/));
@@ -1603,8 +1601,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       const button = widgetContractButton(page, 'Mokapi: Error (2 invalid responses)');
       await button.waitFor({ timeout: 3000 });
       await showsText(button, '2');
-      await button.hover();
-      await page.getByText('Contract validation failed', { exact: true }).waitFor({ timeout: 3000 });
+      await assertTooltip(button, 'Contract validation failed');
       await button.click();
       await page.getByRole('tab', { name: /^Mokapi/, selected: true }).waitFor();
       await eventually(async () => assert.match(page.url(), /path=\/story\/profile--error-invalid/));
@@ -2093,7 +2090,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     await scenario('the global mokapiTest error fails a story without its own test parameter', async (page) => {
       await openWithTestGlobal(page, 'profile--invalid', 'error');
       await assertStoryFails(page, INVALID_HEADLINE);
-      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
+      await assertTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
     });
 
     await scenario('the global mokapiTest off leaves a story without its own test parameter unjudged', async (page) => {
@@ -2112,7 +2109,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
     await scenario('an invalid global mokapiTest falls back to defaultTest and shows a configuration notice', async (page) => {
       await openWithTestGlobal(page, 'profile--invalid', 'strict');
       await notice(page, "Mokapi: global mokapiTest must be 'error', 'warning' or 'off'.").waitFor();
-      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.warning);
+      await assertTooltip(reportBadge(page), TEST_MODE_TEXTS.warning);
     });
 
     await t.test('Vitest fails stories with contract errors', { timeout: 180000 }, async () => {
@@ -2145,7 +2142,7 @@ test('Storybook user validates the MSW responses of a story against the OpenAPI 
       await openValidated(page, 'profile--invalid', failingStorybook);
       await assertStoryFails(page, INVALID_HEADLINE);
       await reportBadge(page).waitFor();
-      await assertBadgeTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
+      await assertTooltip(reportBadge(page), TEST_MODE_TEXTS.error);
     });
   } catch (error) {
     testFailed = true;

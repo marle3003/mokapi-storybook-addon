@@ -40,6 +40,12 @@ export const SlowAfterEach = {
   parameters: { msw: { handlers: [profileHandler(jane)] } },
 };
 
+// The render stays in afterEach until a test calls `window.__releaseAfterEach()`, so the test decides when it finishes.
+export const HeldAfterEach = {
+  afterEach: () => new Promise<void>((resolve) => { (window as { __releaseAfterEach?: () => void }).__releaseAfterEach = resolve; }),
+  parameters: { msw: { handlers: [profileHandler(jane)] } },
+};
+
 // A finite CSS animation keeps the render in `completing` (waitForAnimations), where Storybook does not
 // enqueue a re-render but starts it at once. It runs longer than waitForAnimations' 5 s timeout, so each
 // render leaves `completing` on its own timeout: the old render before the re-render.
